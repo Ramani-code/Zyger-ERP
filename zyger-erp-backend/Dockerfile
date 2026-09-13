@@ -1,5 +1,5 @@
 # ---- Build stage: compile and package the Spring Boot executable JAR ----
-FROM eclipse-temurin:25-jdk AS build
+FROM eclipse-temurin:25-jdk-alpine AS build
 WORKDIR /app
 
 # Install gradle wrapper deps and cache dependencies first (better layer caching)
@@ -15,15 +15,14 @@ COPY src src
 RUN ./gradlew --no-daemon bootJar -x test
 
 # ---- Runtime stage: minimal Java runtime only ----
-FROM eclipse-temurin:25-jre AS runtime
+FROM eclipse-temurin:25-jdk-alpine AS runtime
 
 # Install curl for the container health check only (minimal increase)
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
-    && rm -rf /var/lib/apt/lists/*
+RUN apk add --no-cache curl \
+    && rm -rf /var/cache/apk/*
 
-# Create non-root user for security
-RUN groupadd -r appuser && useradd -r -g appuser -d /app -s /sbin/nologin appuser
+# Create non-root user for security (alpine style)
+RUN addgroup -S appuser && adduser -S -G appuser -h /app -s /sbin/nologin appuser
 
 WORKDIR /app
 
