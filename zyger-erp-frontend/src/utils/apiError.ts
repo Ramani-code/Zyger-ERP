@@ -11,6 +11,12 @@ export function getApiErrorMessage(error: unknown, fallback: string): string {
         if (data.error && typeof data.error === 'string' && data.error.trim() !== '') {
           return data.error;
         }
+        // Spring's ProblemDetail (thrown by BusinessRuleException et al.) serializes the
+        // human-readable text as "detail", not "message"/"error" — without this, every
+        // business-rule error fell through to the generic fallback string.
+        if (data.detail && typeof data.detail === 'string' && data.detail.trim() !== '') {
+          return data.detail;
+        }
       }
     }
   }

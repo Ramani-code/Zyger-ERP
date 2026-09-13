@@ -109,6 +109,16 @@ reg("process",                 "PRC", Effect.NONE,  "PROCESS",                nu
         reg("sales-order",              "SO",   Effect.NONE,  "SALES_ORDER",            null, true);
         reg("proforma-invoice",         "PROF", Effect.NONE,  "PROFORMA_INVOICE",       null, true);
         reg("sales-invoice",            "SINV", Effect.NONE,  "SALES_INVOICE",          null, true);
+        // Phase 2 (SCR-103/SCR-104): Payment Collection and Credit/Debit Note.
+        // Credit/Debit Note's real prefix is CN or DN depending on noteType — resolved
+        // per-request in DocumentFacade.nextNumberFor(), mirroring the existing
+        // issue-internal-external body-driven-prefix pattern; "CN" here is just the
+        // static fallback DocTypes requires one value for.
+        reg("payment-receipt",    "RCPT", Effect.NONE,  "SALES_PAYMENT_RECEIPT",  "amountAllocated", true);
+        reg("credit-debit-note",  "CN",   Effect.NONE,  "SALES_CREDIT_DEBIT_NOTE", null, false);
+        // Phase 3 (SCR-101/SCR-102): Enquiry and Costed Quotation.
+        reg("enquiry",            "ENQ",  Effect.NONE,  "SALES_ENQUIRY",          "qty", true);
+        reg("quotation",          "QTN",  Effect.NONE,  "SALES_QUOTATION",        "qty", true);
         // Planning module
         reg("production-bom",            "BOM",  Effect.NONE,  "PRODUCTION_BOM",         null, true);
         reg("route-sheet",               "RT",   Effect.NONE,  "ROUTE_SHEET",            null, true);

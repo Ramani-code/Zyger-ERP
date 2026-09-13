@@ -1066,10 +1066,14 @@ public class QualityInspectionService {
             }
             if (sourceId != null && ins.getSourceType() != null) {
                 String en = switch (ins.getSourceType().toUpperCase()) {
-                    case "PO_INWARD", "INWARD" -> "PoInward";
+                    // "INWARD"/"PO_INWARD" are the legacy generic tags this field used to carry
+                    // before it was corrected to hold the specific doc-type key; both are kept
+                    // for inspections created before that fix.
+                    case "PO_INWARD", "INWARD", "PO-INWARD" -> "PoInward";
                     case "GRN" -> "Grn";
-                    case "LO_INWARD" -> "LoInward";
-                    case "JO_INWARD" -> "JoInward";
+                    case "LO_INWARD", "LO-INWARD" -> "LoInward";
+                    case "JO_INWARD", "JO-INWARD" -> "JoInward";
+                    case "GENERAL_INWARD", "GENERAL-INWARD" -> "GeneralInward";
                     default -> null;
                 };
                 if (en != null) {

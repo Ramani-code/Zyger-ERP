@@ -57,6 +57,7 @@ export default function PoSchedulePage() {
   // Form state with detailed schedule attributes
   const [newSchedule, setNewSchedule] = useState({
     refDocNo: '',
+    poId: undefined as number | undefined,
     poNo: '',
     supplier: '',
     supplierCode: '',
@@ -190,6 +191,7 @@ export default function PoSchedulePage() {
           const l0 = Array.isArray(p.lines) && p.lines[0] ? p.lines[0] : {};
           refs.push({
             id: `PO-${p.docNo}`,
+            poId: p.id,
             docNo: p.docNo,
             type: 'Purchase Order',
             supplier: p.supplier || '',
@@ -216,7 +218,8 @@ export default function PoSchedulePage() {
       setNewSchedule((prev) => ({
         ...prev,
         refDocNo: selected.docNo,
-        poNo: `SCH-${selected.docNo}`,
+        poId: selected.type === 'Purchase Order' ? selected.poId : undefined,
+        poNo: selected.type === 'Purchase Order' ? selected.docNo : `SCH-${selected.docNo}`,
         supplier: selected.supplier,
         supplierCode: selected.supplierCode || '',
         itemCode: selected.itemCode,
@@ -276,74 +279,100 @@ export default function PoSchedulePage() {
     });
   };
 
-  const handleCreateSchedule = (e: React.FormEvent) => {
+  const [saving, setSaving] = useState(false);
+
+  const handleCreateSchedule = async (e: React.FormEvent) => {
     e.preventDefault();
-    const poNumber = newSchedule.poNo.trim() || `SCH-${Date.now().toString().slice(-4)}`;
-    const created: ScheduleRow = {
-      id: Date.now(),
-      poNo: poNumber,
-      refDocNo: newSchedule.refDocNo || poNumber,
-      supplier: newSchedule.supplier.trim(),
-      supplierCode: newSchedule.supplierCode,
-      itemCode: newSchedule.itemCode.trim(),
-      itemDescription: newSchedule.itemDescription,
-      uom: newSchedule.uom,
-      unitPrice: newSchedule.unitPrice,
-      totalAmount: newSchedule.scheduledQty * newSchedule.unitPrice,
-      scheduledQty: Number(newSchedule.scheduledQty) || 0,
-      scheduledDate: newSchedule.scheduledDate,
-      receivedQty: 0,
-      pendingQty: Number(newSchedule.scheduledQty) || 0,
-      location: newSchedule.location,
-      priority: newSchedule.priority as any,
-      contactPerson: newSchedule.contactPerson,
-      status: 'PLANNED',
-      remarks: newSchedule.remarks,
-    };
+    // A schedule row only means something tied to a real Purchase Order — this used to
+    // create a local-only row that vanished on refresh even when a PO was selected, since
+    // nothing was ever persisted. Now it requires a real PO reference and actually saves.
+    if (!newSchedule.poId) {
+      toast('Select a Purchase Order from "Reference Document" first — a schedule must be tied to a real PO to be saved.', 'error');
+      return;
+    }
+    setSaving(true);
+    try {
+      const { data: savedRow } = await axiosClient.post(
+        `/v1/purchase/purchase-order/${newSchedule.poId}/schedules`,
+        {
+          itemCode: newSchedule.itemCode.trim(),
+          scheduledQty: Number(newSchedule.scheduledQty) || 0,
+          scheduledDate: newSchedule.scheduledDate,
+          supplier: newSchedule.supplier.trim(),
+          status: 'PLANNED',
+        }
+      );
 
-    setSchedules((prev) => [created, ...prev]);
-    setShowModal(false);
+      const created: ScheduleRow = {
+        id: savedRow.id,
+        poNo: newSchedule.poNo,
+        refDocNo: newSchedule.refDocNo || newSchedule.poNo,
+        supplier: newSchedule.supplier.trim(),
+        supplierCode: newSchedule.supplierCode,
+        itemCode: newSchedule.itemCode.trim(),
+        itemDescription: newSchedule.itemDescription,
+        uom: newSchedule.uom,
+        unitPrice: newSchedule.unitPrice,
+        totalAmount: newSchedule.scheduledQty * newSchedule.unitPrice,
+        scheduledQty: Number(newSchedule.scheduledQty) || 0,
+        scheduledDate: newSchedule.scheduledDate,
+        receivedQty: 0,
+        pendingQty: Number(newSchedule.scheduledQty) || 0,
+        location: newSchedule.location,
+        priority: newSchedule.priority as any,
+        contactPerson: newSchedule.contactPerson,
+        status: 'PLANNED',
+        remarks: newSchedule.remarks,
+      };
 
-    // Trigger Notification Banner
-    setActiveNotification({
-      poNo: created.poNo,
-      supplier: created.supplier,
-      itemCode: created.itemCode,
-      itemDescription: created.itemDescription,
-      scheduledQty: created.scheduledQty,
-      scheduledDate: created.scheduledDate,
-    });
+      setSchedules((prev) => [created, ...prev]);
+      setShowModal(false);
 
-    toast(`🔔 Scheduled PO ${created.poNo} for ${created.itemCode}! Go to Purchase to buy items.`, 'success');
+      setActiveNotification({
+        poNo: created.poNo,
+        supplier: created.supplier,
+        itemCode: created.itemCode,
+        itemDescription: created.itemDescription,
+        scheduledQty: created.scheduledQty,
+        scheduledDate: created.scheduledDate,
+      });
 
-    logSystemActivity({
-      module: 'Purchase',
-      activity: `Scheduled PO Delivery (${created.poNo})`,
-      refNo: created.poNo,
-      party: created.supplier,
-      user: user?.username || 'Unknown',
-      status: 'PLANNED',
-    });
+      toast(`🔔 Scheduled PO ${created.poNo} for ${created.itemCode}! Go to Purchase to buy items.`, 'success');
 
-    // Reset form
-    setNewSchedule({
-      refDocNo: '',
-      poNo: '',
-      supplier: '',
-      supplierCode: '',
-      itemCode: '',
-      itemDescription: '',
-      uom: '',
-      unitPrice: 0,
-      scheduledQty: 0,
-      totalAmount: 0,
-      scheduledDate: new Date().toISOString().split('T')[0],
-      location: '',
-      priority: 'NORMAL',
-      contactPerson: '',
-      phone: '',
-      remarks: '',
-    });
+      logSystemActivity({
+        module: 'Purchase',
+        activity: `Scheduled PO Delivery (${created.poNo})`,
+        refNo: created.poNo,
+        party: created.supplier,
+        user: user?.username || 'Unknown',
+        status: 'PLANNED',
+      });
+
+      setNewSchedule({
+        refDocNo: '',
+        poId: undefined,
+        poNo: '',
+        supplier: '',
+        supplierCode: '',
+        itemCode: '',
+        itemDescription: '',
+        uom: '',
+        unitPrice: 0,
+        scheduledQty: 0,
+        totalAmount: 0,
+        scheduledDate: new Date().toISOString().split('T')[0],
+        location: '',
+        priority: 'NORMAL',
+        contactPerson: '',
+        phone: '',
+        remarks: '',
+      });
+    } catch (err) {
+      toast('Failed to save the schedule row — see console for details.', 'error');
+      console.error(err);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const filtered = schedules.filter(
@@ -812,9 +841,9 @@ export default function PoSchedulePage() {
                 <button type="button" className="btn btn-s" onClick={() => setShowModal(false)}>
                   Cancel
                 </button>
-                <button type="submit" className="btn btn-p">
+                <button type="submit" className="btn btn-p" disabled={saving}>
                   <span className="material-symbols-rounded">save</span>
-                  Save Schedule
+                  {saving ? 'Saving...' : 'Save Schedule'}
                 </button>
               </div>
             </form>

@@ -4,12 +4,17 @@ import jakarta.persistence.*;
 import lombok.*;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.List;
 
 @Entity @Table(name="sales_dc_line") @Getter @Setter
 public class SalesDcLine extends BaseLine implements LineEntity {
 
     @ManyToOne(fetch=FetchType.LAZY) @JoinColumn(name="doc_id") @JsonIgnore
     SalesDc doc;
+
+    @OneToMany(mappedBy="dcLine", cascade=CascadeType.ALL, orphanRemoval=true, fetch=FetchType.EAGER)
+    List<SalesDcPackingDetail> packingDetails = new ArrayList<>();
 
     @Column(name="item_name", length=200) String itemName;
     @Column(name="customer_part_number", length=60) String customerPartNumber;

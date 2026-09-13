@@ -13,10 +13,11 @@ import java.util.List;
  * -> APPROVED -> POSTED lifecycle as every other document type (DocumentFacade); posting decreases
  * the store balance via the standard Effect.OUT path (doc/DocTypes.java).
  *
- * [ASSUMPTION] Financial posting (an actual debit note reducing the vendor's payable) is out of
- * scope here per the brief — this records the stock movement and a `debitNoteRequired` flag +
- * `debitNoteAmount` for the finance side to act on manually until a full AP module exists
- * (see VendorLedgerEntry — this document does not yet post a ledger entry automatically).
+ * When `debitNoteRequired` is true and `debitNoteAmount` (or, if blank, the summed line net
+ * amounts) is greater than zero, reaching POSTED automatically writes a negative VendorLedgerEntry
+ * (txType RETURN) reducing the vendor's payable — see DocumentFacade.postToVendorLedger(). This
+ * is idempotent per (refDocType, refDocNo); there is still no full AP module (no Payment document
+ * type, no ledger reconciliation UI) beyond this ledger-entry posting.
  */
 @Entity @Table(name = "purchase_return") @Getter @Setter @DocKey("purchase-return")
 public class PurchaseReturn extends BaseDoc implements DocEntity {

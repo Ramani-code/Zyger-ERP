@@ -48,6 +48,7 @@ public class DocumentFacade {
     @Autowired in.zygertechnology.zygererp.repo.LocationRepository locations;
     @Autowired VendorLedgerService vendorLedger;
     @Autowired in.zygertechnology.zygererp.repo.PoAmendmentHistoryRepository poAmendments;
+    @Autowired in.zygertechnology.zygererp.repo.PurchaseOrderScheduleRepository poSchedules;
 
     private final Map<String, Class<? extends DocEntity>> reg = new HashMap<>();
 
@@ -76,6 +77,17 @@ public class DocumentFacade {
         return d;
     }
 
+    /** Persists a fully-built entity as-is — for the rare cases (e.g. Quotation
+     * "revise") where a service needs to create a new document row with fields the
+     * generic Map-bodied {@link #create} can't express, such as reusing an existing
+     * docNo across a revision chain instead of allocating a fresh one. */
+    @Transactional
+    public DocEntity persistNew(DocEntity e) {
+        em.persist(e);
+        em.flush();
+        return e;
+    }
+
     @Transactional(readOnly = true)
     public DocEntity getByNumber(String key, String docNo) {
         String en = cls(key).getSimpleName();
@@ -85,6 +97,29 @@ public class DocumentFacade {
                 .getResultList();
         if (found.isEmpty()) throw new IllegalArgumentException("Document not found: " + docNo);
         return (DocEntity) found.get(0);
+    }
+
+    /** Null-safe sibling of {@link #getByNumber} for best-effort lookups that must not
+     * fail the caller's request when the referenced document doesn't exist (e.g. a
+     * dangling/typo'd cross-reference). getByNumber is deliberately not reused here:
+     * it's @Transactional, and a "not found" IllegalArgumentException thrown from an
+     * @Transactional method that's PARTICIPATING in the caller's own transaction marks
+     * that whole transaction rollback-only via Spring's AOP advice at the moment the
+     * exception propagates through the proxy boundary — catching it afterward in the
+     * caller does not undo that marking, so the caller's later commit still fails with
+     * UnexpectedRollbackException even though the exception was "handled". This method
+     * runs the same query without ever throwing, so no proxy-boundary exception occurs. */
+    public DocEntity getByNumberOrNull(String key, String docNo) {
+        try {
+            String en = cls(key).getSimpleName();
+            List<?> found = em.createQuery("select d from " + en + " d where d.docNo = :docNo", cls(key))
+                    .setParameter("docNo", docNo)
+                    .setMaxResults(1)
+                    .getResultList();
+            return found.isEmpty() ? null : (DocEntity) found.get(0);
+        } catch (Exception ex) {
+            return null;
+        }
     }
 
     @Transactional(readOnly = true)
@@ -226,6 +261,24 @@ public class DocumentFacade {
             if (cp != null) r.put("contactPerson", cp);
             if (ph != null) r.put("phone", ph);
             if (emStr != null) r.put("email", emStr);
+        }
+        if (e instanceof SalesInvoice si) {
+            // GST tax-invoice template shows the buyer's contact person / phone /
+            // email on the Billed-To panel — pulled from the customer master.
+            String cust = si.getCustomer();
+            String code = si.getCustomerCode();
+            Optional<Party> pOpt = code != null && !code.isBlank() ? parties.findByCode(code) : Optional.empty();
+            if (pOpt.isEmpty() && cust != null && !cust.isBlank()) pOpt = parties.findByName(cust);
+            if (pOpt.isPresent()) {
+                Party p = pOpt.get();
+                r.putIfAbsent("contactPerson", p.getContactPerson() == null ? "" : p.getContactPerson());
+                r.putIfAbsent("phone", p.getPhone() != null ? p.getPhone() : p.getMobile());
+                r.putIfAbsent("email", p.getEmail());
+            } else {
+                r.putIfAbsent("contactPerson", "");
+                r.putIfAbsent("phone", "");
+                r.putIfAbsent("email", "");
+            }
         }
         denormalizeLines(r, findKeyForEntity(e));
 
@@ -476,6 +529,10 @@ public class DocumentFacade {
             "stock-issue-request", "physical-stock-amendment", "subcontract-invoice",
             // Purchase
             "purchase-request", "supplier-enquiry", "supplier-quotation", "purchase-order", "job-order",
+            // Purchase Module audit: purchase-return was the only Purchase doc type not covered
+            // here, so a zero-line return could reach POSTED with the over-return guard (which
+            // only iterates existing lines) never actually running.
+            "purchase-return",
             // Sales
             "sales-order", "proforma-invoice", "sales-invoice"
     );
@@ -595,6 +652,9 @@ public class DocumentFacade {
         if (e.getLines() != null) {
             for (LineEntity l : e.getLines()) {
                 if (l instanceof BaseLine bl) bl.setId(null);
+                if (l instanceof SalesDcLine sdl && sdl.getPackingDetails() != null) {
+                    for (SalesDcPackingDetail pd : sdl.getPackingDetails()) pd.setId(null);
+                }
             }
         }
         e.setStatus("DRAFT");
@@ -611,6 +671,7 @@ public class DocumentFacade {
         validateReceivedAgainstIssue(key, e);
         validateBatchHeat(key, e);
         validatePoInward(key, e);
+        validateDuplicateInwardChallan(key, e);
         validateAmendmentReason(key, e);
         validateReleaseBalance(key, e);
         validateGeneralInwardReason(key, e);
@@ -619,7 +680,8 @@ public class DocumentFacade {
 
         // §9.3: Backdated-entry authorization guard
         String docDateStr = body.get("date") != null ? String.valueOf(body.get("date")) : null;
-        backdatedEntryGuard.enforce(docDateStr, user);
+        Object overrideReasonObj = body.get("backdatedOverrideReason");
+        backdatedEntryGuard.enforce(docDateStr, user, overrideReasonObj != null ? String.valueOf(overrideReasonObj) : null);
 
         String docNo = nextUnusedNumber(key, body);
         e.setDocNo(docNo);
@@ -688,9 +750,15 @@ public class DocumentFacade {
             String prefix = QualityInspectionService.prefixForType(inspectionType);
             qi.setDocNo(numbers.next(QualityInspectionService.KEY, prefix));
             qi.setInspectionType(inspectionType);
-            qi.setSourceType("INWARD");
+            // Inward Entry FRD v2.0 §3.2/§6.3 (G1): sourceType must be the specific inward doc
+            // key, not a generic "INWARD" — releaseHeldStockToStore()/applyDispositionStock() on
+            // accept/reject key their QC_HOLD lookup on this inspection's own item/batch/heat, and
+            // several other lookups (resolveSupplier, close-cascade) switch on sourceType by key.
+            qi.setSourceType(key);
             if (e.getId() != null) qi.setSourceId(e.getId().toString());
             qi.setSourceNumber(e.getDocNo());
+            qi.setBatchNumber(line.getBatchNo());
+            qi.setHeatNumber(line.getHeatNo());
             qi.setDocDate(e.getDocDate() != null ? e.getDocDate() : LocalDate.now());
             qi.setInspectionDate(e.getDocDate() != null ? e.getDocDate() : LocalDate.now());
             qi.setInspectionStatus("DRAFT");
@@ -760,6 +828,10 @@ public class DocumentFacade {
             String prefix = "INTERNAL".equalsIgnoreCase(strVal(body.get("issueType"))) ? "ISI" : "EXT";
             return numbers.next(key, prefix);
         }
+        if ("credit-debit-note".equals(key)) {
+            String prefix = "DEBIT".equalsIgnoreCase(strVal(body.get("noteType"))) ? "DN" : "CN";
+            return numbers.next(key, prefix);
+        }
         return numbers.next(key);
     }
 
@@ -810,6 +882,9 @@ public class DocumentFacade {
             managed.clear();
             for (LineEntity l : incoming.getLines()) {
                 if (l instanceof BaseLine bl) bl.setId(null);
+                if (l instanceof SalesDcLine sdl && sdl.getPackingDetails() != null) {
+                    for (SalesDcPackingDetail pd : sdl.getPackingDetails()) pd.setId(null);
+                }
                 managed.add(l);
             }
         }
@@ -850,6 +925,11 @@ public class DocumentFacade {
         old.setUpdatedBy(user);
         validateGeneralDcGstin(key, old);
         validateReleaseBalance(key, old);
+        // BR-INV-GRN-1: create() enforces accepted+rejected <= inspected, but a DRAFT GRN
+        // edited via update() skipped this check entirely — a user could raise accepted/
+        // rejected qty past what was actually inspected and it would go straight through
+        // to post() unvalidated.
+        validateGrn(key, old);
         attach(old);
         return old;
     }
@@ -938,6 +1018,15 @@ public class DocumentFacade {
             case "post" -> "POSTED";
             case "close" -> "CLOSED";
             case "confirm-receipt" -> "RECEIVED";
+            // SCR-103 Payment Collection (Phase 2): DRAFT -> ALLOCATED -> POSTED, or
+            // POSTED -> REVERSED. These aren't generic-workflow words, so they're mapped
+            // here rather than added to DocumentWorkflowEngine's shared vocabulary.
+            case "allocate" -> "ALLOCATED";
+            case "reverse" -> "REVERSED";
+            // SCR-102 Quotation (Phase 3): APPROVED -> SENT_TO_CUSTOMER, or -> LOST from
+            // either Quotation or Enquiry (both carry a LOST terminal status).
+            case "send-to-customer" -> "SENT_TO_CUSTOMER";
+            case "mark-lost" -> "LOST";
             default -> action;
         };
 
@@ -958,10 +1047,23 @@ public class DocumentFacade {
                     applyThresholdRouting(key, e);
                 }
                 case "approve" -> {
-                    requireStatus(e, "DRAFT", "SUBMITTED");
+                    // Phase 4 tier router: a submitted Sales Order lands on
+                    // PENDING_TIER1/2/3, not the generic SUBMITTED, so its approve
+                    // must accept those too — every other doc type is unaffected.
+                    if ("sales-order".equals(key)) {
+                        requireStatus(e, "DRAFT", "SUBMITTED", "PENDING_TIER1", "PENDING_TIER2", "PENDING_TIER3");
+                    } else {
+                        requireStatus(e, "DRAFT", "SUBMITTED");
+                    }
                     validateApprovalReferences(key, e);
                 }
-                case "reject" -> requireStatus(e, "SUBMITTED", "DRAFT");
+                case "reject" -> {
+                    if ("sales-order".equals(key)) {
+                        requireStatus(e, "DRAFT", "SUBMITTED", "PENDING_TIER1", "PENDING_TIER2", "PENDING_TIER3");
+                    } else {
+                        requireStatus(e, "SUBMITTED", "DRAFT");
+                    }
+                }
                 case "reopen" -> requireStatus(e, "REJECTED");
                 case "cancel" -> {
                     requireStatus(e, "DRAFT", "SUBMITTED", "APPROVED", "CONFIRMED", "POSTED", "RECEIVED");
@@ -981,6 +1083,22 @@ public class DocumentFacade {
                             throw new IllegalArgumentException("Cancellation remark is mandatory for a posted return");
                         }
                         reverseReturnStock(key, e, user);
+                    }
+                    // Inward Entry FRD v2.0 §6.4/§9.3: cancelling a POSTED inward reverses the
+                    // stock it added — without this, cancellation was a silent no-op that left
+                    // the receipt's stock in place while the document itself showed CANCELLED.
+                    // Restricted to Store Manager/Admin with a mandatory reason; blocked outright
+                    // if the receipt has already been consumed downstream (verifyStockAvailability,
+                    // called inside reverseInwardStock's recordStockOut, throws in that case).
+                    if (DIRECT_POST_INWARD_KEYS.contains(key) && "POSTED".equals(e.getStatus())) {
+                        if (note == null || note.isBlank()) {
+                            throw new IllegalArgumentException("Cancellation remark is mandatory for a posted inward document");
+                        }
+                        if (!CurrentUserRoles.hasAnyRole("ADMIN", "STORE_MANAGER", "STORES_MANAGER")) {
+                            throw new IllegalArgumentException(
+                                    "Cancelling a posted inward document requires a Store Manager or Admin role");
+                        }
+                        reverseInwardStock(key, e, user);
                     }
                 }
                 case "confirm-receipt", "confirm_receipt" -> {
@@ -1003,10 +1121,19 @@ public class DocumentFacade {
                     }
                 }
                 case "post" -> {
-                    if (!DIRECT_POST_INWARD_KEYS.contains(key) && !DIRECT_POST_DC_KEYS.contains(key)) {
+                    if ("payment-receipt".equals(key)) {
+                        // SCR-103: no separate approval step — a receipt posts straight
+                        // from ALLOCATED, not from APPROVED like the generic doc types.
+                        requireStatus(e, "ALLOCATED");
+                    } else if (!DIRECT_POST_INWARD_KEYS.contains(key) && !DIRECT_POST_DC_KEYS.contains(key)) {
                         requireStatus(e, "APPROVED");
                     }
                     if ("sales-dc".equals(key)) enforceFinalInspectionGate(e, options);
+                    // BR-INV-GRN-1, defense-in-depth: re-check at the actual moment stock
+                    // is about to move, not only at create/update — the two upstream checks
+                    // guard normal edits, but this is the last line of defense against any
+                    // path that reaches post() without having gone through them.
+                    validateGrn(key, e);
                     // Stock Allotment & Adjustment FRS v1.0 §5/§6: amendments whose
                     // |difference| (qty or value) or physical variance exceeds the
                     // configured tolerance must be explicitly approved before posting.
@@ -1014,6 +1141,26 @@ public class DocumentFacade {
                     post(key, e, boolVal(options.get("authorizedOverride")));
                     e.setStatus("POSTED");
                     postToVendorLedger(key, e);
+                    updatePoScheduleReceivedQty(key, e);
+                }
+                case "allocate" -> {
+                    if ("payment-receipt".equals(key)) requireStatus(e, "DRAFT");
+                }
+                case "reverse" -> {
+                    if ("payment-receipt".equals(key)) {
+                        requireStatus(e, "POSTED");
+                        if (note == null || note.isBlank()) {
+                            throw new IllegalArgumentException("Reversal reason is mandatory");
+                        }
+                    }
+                }
+                case "send-to-customer" -> {
+                    if ("quotation".equals(key)) requireStatus(e, "APPROVED");
+                }
+                case "mark-lost" -> {
+                    if (Set.of("enquiry", "quotation").contains(key) && (note == null || note.isBlank())) {
+                        throw new IllegalArgumentException("Lost reason is mandatory");
+                    }
                 }
                 default -> { }
             }
@@ -1124,7 +1271,16 @@ public class DocumentFacade {
                 && "Receiving after Job Work".equalsIgnoreCase(headerStr(e, "challanPurpose"));
 
         for (LedgerLine l : lines) {
-            requireActiveStore(l.loc());
+            // Effect.NONE doc types (sales-order, proforma-invoice, sales-invoice, ...)
+            // never move stock, so a line with no real location — defaulted to "MAIN"
+            // by collectLines() purely so the ledger record has *some* value — must not
+            // be forced through the active-store check. That check exists for doc types
+            // that actually post a stock movement to a real location; for a no-effect
+            // doc type it just blocked Post outright with no user-facing way to fix it,
+            // since these doc types have no location field to begin with.
+            if (def.effect() != DocTypes.Effect.NONE) {
+                requireActiveStore(l.loc());
+            }
             if (skipStockEffect) continue;
             if ("transfer-dc".equals(key)) {
                 String destLoc = headerStr(e, "destinationLocation");
@@ -1323,6 +1479,43 @@ public class DocumentFacade {
             }
         } catch (Exception ex) {
             log.warn("postToVendorLedger skipped for {} {}: {}", key, e.getDocNo(), ex.getMessage());
+        }
+    }
+
+    /**
+     * Purchase Module audit: PurchaseOrderSchedule.receivedQty/pendingQty existed as columns
+     * but nothing anywhere ever wrote them — confirmed by a full-backend grep for any setter
+     * call against this class. Posting a PO Inward is the actual receipt event, so this is
+     * where that gap closes: allocate the received qty (oldest scheduled date first) across
+     * that PO's schedule rows for the same item, until it's exhausted.
+     */
+    private void updatePoScheduleReceivedQty(String key, DocEntity e) {
+        if (!"po-inward".equals(key) || !(e instanceof PoInward pi)) return;
+        try {
+            String poNo = pi.getPurchaseOrderNo();
+            if (poNo == null || poNo.isBlank() || pi.getLines() == null) return;
+            for (PoInwardLine line : pi.getLines()) {
+                if (line.getItemCode() == null || line.getReceivedQty() == null) continue;
+                BigDecimal remaining = line.getReceivedQty();
+                if (remaining.signum() <= 0) continue;
+                List<PurchaseOrderSchedule> rows = poSchedules.findByDocDocNoAndItemCode(poNo, line.getItemCode());
+                rows.sort(Comparator.comparing(PurchaseOrderSchedule::getScheduledDate,
+                        Comparator.nullsLast(Comparator.naturalOrder())));
+                for (PurchaseOrderSchedule row : rows) {
+                    if (remaining.signum() <= 0) break;
+                    BigDecimal pending = row.getPendingQty() != null ? row.getPendingQty()
+                            : (row.getScheduledQty() != null ? row.getScheduledQty() : BigDecimal.ZERO);
+                    if (pending.signum() <= 0) continue;
+                    BigDecimal applied = remaining.min(pending);
+                    row.setReceivedQty((row.getReceivedQty() != null ? row.getReceivedQty() : BigDecimal.ZERO).add(applied));
+                    row.setPendingQty(pending.subtract(applied));
+                    row.setStatus(row.getPendingQty().signum() <= 0 ? "RECEIVED" : "PARTIALLY_RECEIVED");
+                    poSchedules.save(row);
+                    remaining = remaining.subtract(applied);
+                }
+            }
+        } catch (Exception ex) {
+            log.warn("updatePoScheduleReceivedQty skipped for {} {}: {}", key, e.getDocNo(), ex.getMessage());
         }
     }
 
@@ -1592,6 +1785,11 @@ public class DocumentFacade {
                     clazz = clazz.getSuperclass();
                 }
             }
+            if (l instanceof SalesDcLine sdl && sdl.getPackingDetails() != null) {
+                for (SalesDcPackingDetail pd : sdl.getPackingDetails()) {
+                    pd.setDcLine(sdl);
+                }
+            }
         }
     }
 
@@ -1804,9 +2002,32 @@ public class DocumentFacade {
         }
     }
 
+    /** Re-enabled per the CNC-shop target-state FRS (2026-09-12), which calls for this to be a
+     * hard rule rather than optional — it was previously disabled deliberately (see git history)
+     * per an earlier, narrower decision that this FRS explicitly supersedes. Scoped to documents
+     * that actually move stock (Inward/Issue, DocTypes.Effect IN/OUT) — the FRS itself says
+     * "mandatory... at Inward and Issue", and a planning document like Purchase Request doesn't
+     * know the batch/heat number yet (confirmed by the existing
+     * DocumentFacadeTest.ValidateBatchHeat.purchaseRequestExemptFromBatchCheck expectation). */
     private void validateBatchHeat(String key, DocEntity e) {
-        // Completely removed mandatory requires batch/heat number rule
-        return;
+        if (e.getLines() == null) return;
+        DocTypes.Effect effect;
+        try { effect = DocTypes.get(key).effect(); } catch (Exception ex) { return; }
+        if (effect != DocTypes.Effect.IN && effect != DocTypes.Effect.OUT) return;
+        for (LineEntity line : e.getLines()) {
+            String itemCode = line.getItemCode();
+            if (itemCode == null || itemCode.isBlank()) continue;
+            var item = itemCache.findByCode(itemCode).orElse(null);
+            if (item == null) continue;
+            if (Boolean.TRUE.equals(item.getRequiresBatch()) && (line.getBatchNo() == null || line.getBatchNo().isBlank())) {
+                throw new BusinessRuleException("BATCH_NUMBER_REQUIRED",
+                        "Item " + itemCode + " requires a batch number.", Map.of("itemCode", itemCode));
+            }
+            if (Boolean.TRUE.equals(item.getRequiresHeat()) && (line.getHeatNo() == null || line.getHeatNo().isBlank())) {
+                throw new BusinessRuleException("HEAT_NUMBER_REQUIRED",
+                        "Item " + itemCode + " requires a heat number.", Map.of("itemCode", itemCode));
+            }
+        }
     }
 
     private void validateAmendmentReason(String key, DocEntity e) {
@@ -1900,8 +2121,32 @@ public class DocumentFacade {
         }
     }
 
+    private static final Map<String, String> GRN_SOURCE_TYPE_TO_DOC_KEY = Map.of(
+            "PO_INWARD", "po-inward",
+            "LO_INWARD", "lo-inward",
+            "JO_INWARD", "jo-inward",
+            "GENERAL_INWARD", "general-inward",
+            "RETURN_INWARD", "return-inward"
+    );
+
     private void validateGrn(String key, DocEntity e) {
         if (!"grn".equals(key)) return;
+        // BR-INV-TRACE-1: sourceDocumentNo is GRN's own cross-document reference and was
+        // never actually checked — a GRN could carry a typo'd or nonexistent source doc
+        // number all the way through to POSTED with nothing catching it.
+        if (e instanceof Grn grn) {
+            String sourceDocNo = grn.getSourceDocumentNo();
+            if (sourceDocNo != null && !sourceDocNo.isBlank()) {
+                String sourceKey = GRN_SOURCE_TYPE_TO_DOC_KEY.get(grn.getSourceType());
+                if (sourceKey != null) {
+                    DocEntity source = getByNumberOrNull(sourceKey, sourceDocNo);
+                    if (source == null) {
+                        throw new IllegalStateException(
+                                "GRN sourceDocumentNo '" + sourceDocNo + "' does not resolve to an existing " + grn.getSourceType());
+                    }
+                }
+            }
+        }
         for (LineEntity line : e.getLines()) {
             if (line instanceof GrnLine gl) {
                 BigDecimal accepted = gl.getAcceptedQty() != null ? gl.getAcceptedQty() : BigDecimal.ZERO;
@@ -1922,6 +2167,56 @@ public class DocumentFacade {
     private void validatePoInward(String key, DocEntity e) {
         if (!"po-inward".equals(key)) return;
         // Direct inventory update enabled — business rule validation bypassed as requested.
+    }
+
+    /**
+     * Inward Entry FRD v2.0 §8.2 (G5): the same supplier invoice/DC number booked twice against
+     * the same supplier/vendor on a PO or LO Inward is almost always a double-entry of one
+     * delivery, not two genuine receipts — hard-stop it rather than let it silently double stock
+     * and vendor liability. Unlike the PO-quantity/batch-heat rules elsewhere in this file, this
+     * check has no prior history in this codebase, so it isn't reverting anything intentional.
+     */
+    private void validateDuplicateInwardChallan(String key, DocEntity e) {
+        if (!Set.of("po-inward", "lo-inward").contains(key)) return;
+        String invoiceNo = headerStr(e, "supplierInvoiceNo");
+        String dcNo = headerStr(e, "dcNumber");
+        boolean hasInvoice = invoiceNo != null && !invoiceNo.isBlank();
+        boolean hasDc = dcNo != null && !dcNo.isBlank();
+        if (!hasInvoice && !hasDc) return;
+
+        String partyField = "po-inward".equals(key) ? "supplier" : "vendor";
+        String party = headerStr(e, partyField);
+        if (party == null || party.isBlank()) return;
+
+        try {
+            String entityName = cls(key).getSimpleName();
+            StringBuilder jpql = new StringBuilder("select d.docNo from ").append(entityName)
+                    .append(" d where d.deleted = false and d.status <> 'CANCELLED' and d.docNo <> :docNo and d.")
+                    .append(partyField).append(" = :party and (");
+            List<String> clauses = new ArrayList<>();
+            if (hasInvoice) clauses.add("d.supplierInvoiceNo = :invoiceNo");
+            if (hasDc) clauses.add("d.dcNumber = :dcNo");
+            jpql.append(String.join(" or ", clauses)).append(")");
+
+            var query = em.createQuery(jpql.toString(), String.class)
+                    .setParameter("docNo", e.getDocNo() != null ? e.getDocNo() : "")
+                    .setParameter("party", party);
+            if (hasInvoice) query.setParameter("invoiceNo", invoiceNo);
+            if (hasDc) query.setParameter("dcNo", dcNo);
+
+            List<String> matches = query.setMaxResults(1).getResultList();
+            if (!matches.isEmpty()) {
+                throw new BusinessRuleException("DUPLICATE_CHALLAN",
+                        "This supplier invoice/DC number is already booked against " + party
+                                + " on document " + matches.get(0) + ". If this is genuinely a separate delivery, "
+                                + "use a different reference number.",
+                        Map.of("existingDocNo", matches.get(0)));
+            }
+        } catch (BusinessRuleException ex) {
+            throw ex;
+        } catch (Exception ex) {
+            log.warn("validateDuplicateInwardChallan skipped for {} {}: {}", key, e.getDocNo(), ex.getMessage());
+        }
     }
 
     /**
@@ -2265,6 +2560,34 @@ public class DocumentFacade {
             case "SCRAP" -> "SCRAP";
             default -> "FREE";
         };
+    }
+
+    /**
+     * Inward Entry FRD v2.0 §9.3: reverses the stock a POSTED inward document added, as an
+     * equal-and-opposite stock-out per line. recordStockOut's own verifyStockAvailability
+     * check is what blocks cancellation when the receipt (or part of it) has already been
+     * consumed downstream — this deliberately reuses that guard rather than duplicating it,
+     * surfacing a clearer message on the way out.
+     */
+    private void reverseInwardStock(String key, DocEntity e, String user) {
+        if (e.getLines() == null) return;
+        LocalDate now = LocalDate.now();
+        String txType = key.toUpperCase().replace("-", "_") + "_CANCEL";
+        for (LineEntity line : e.getLines()) {
+            BigDecimal qty = line.getQty();
+            if (qty == null || qty.compareTo(BigDecimal.ZERO) <= 0) continue;
+            String loc = line.getLocation() != null && !line.getLocation().isBlank()
+                    ? line.getLocation() : "MAIN";
+            try {
+                stockService.recordStockOut(e.getDocNo(), key, txType,
+                        line.getItemCode(), loc, line.getBatchNo(), line.getHeatNo(),
+                        qty, now, user, false);
+            } catch (IllegalArgumentException ex) {
+                throw new IllegalStateException("Cannot cancel " + e.getDocNo() + ": item " + line.getItemCode()
+                        + " at " + loc + " has already been partly or fully consumed downstream. "
+                        + "Use Stock Adjustment / Return instead. (" + ex.getMessage() + ")", ex);
+            }
+        }
     }
 
     // ---------- Threshold auto-approval routing (Allotment & Adjustment FRS §5/§6) -

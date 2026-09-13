@@ -52,6 +52,11 @@ public class WorkOrder extends BaseDoc implements DocEntity {
     @Column(name = "batch_lot_no", length = 60) String batchLotNo;
     @Column(name = "production_department", length = 100) String productionDepartment;
     @Column(name = "approved_by", length = 60) String approvedBy;
+    /** Production Module FRS §7 BR: snapshot of qty/due date at the moment of approval, so
+     * "release" can detect whether they were edited since — a deviation that requires
+     * Production Supervisor/Plant Head authorization rather than auto-releasing. */
+    @Column(name = "approved_quantity", precision = 18, scale = 4) BigDecimal approvedQuantity;
+    @Column(name = "approved_due_date") LocalDate approvedDueDate;
     @Column(name = "released_by", length = 60) String releasedBy;
     @Column(name = "closed_by", length = 60) String closedBy;
     @Column(name = "started_by", length = 60) String startedBy;

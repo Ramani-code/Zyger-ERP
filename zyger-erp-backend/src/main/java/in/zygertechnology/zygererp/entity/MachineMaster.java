@@ -43,6 +43,17 @@ public class MachineMaster {
     @Column(name = "spindle_speed") Integer spindleSpeed;
     @Column(name = "spindle_power", precision = 10, scale = 2) BigDecimal spindlePower;
     @Column(name = "tool_capacity", length = 100) String toolCapacity;
+
+    /** CNC Turning / CNC Milling / VMC / HMC / CNC Grinding / Conventional / Inspection Equipment
+     * — distinct from the free-text {@link #machineType} above (kept for backward compatibility). */
+    @Column(name = "machine_class", length = 60) String machineClass;
+    @Column(name = "axis_count") Integer axisCount;
+    /** Spindle speed range (min/max). {@link #spindleSpeed} (single value) stays for existing readers. */
+    @Column(name = "spindle_speed_min") Integer spindleSpeedMin;
+    @Column(name = "spindle_speed_max") Integer spindleSpeedMax;
+    @Column(name = "chuck_or_table_size", length = 100) String chuckOrTableSize;
+    /** FK to MeterMaster — enables usage-based (not just calendar-based) PM scheduling. */
+    @Column(name = "linked_meter_id") Long linkedMeterId;
     @Column(name = "max_machining_dia", precision = 10, scale = 2) BigDecimal maxMachiningDia;
     @Column(name = "max_machining_length", precision = 10, scale = 2) BigDecimal maxMachiningLength;
     @Column(name = "x_axis_travel", precision = 10, scale = 2) BigDecimal xAxisTravel;

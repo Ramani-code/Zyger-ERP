@@ -298,7 +298,8 @@ export function validateDeliveryChallanForm(
   config: DeliveryChallanTypeConfig,
   form: DeliveryChallanFormState,
   itemsMap: Map<string, ItemMasterDto>,
-  _strict: boolean
+  strict: boolean,
+  availabilityMap: Record<string, string> = {}
 ): string[] {
   const errors: string[] = [];
 
@@ -364,6 +365,24 @@ export function validateDeliveryChallanForm(
 
     if (!line.location.trim()) {
       errors.push(`Line ${lineNo}: Location is required.`);
+    }
+
+    // FRS §07/BR-INV-TRACE-6: an OUT posting must never exceed store-available stock —
+    // Stock Issue already enforces this client-side; DC dispatch relied on the backend's
+    // late rejection alone, so a user only found out after submitting.
+    if (strict && line.itemCode && qty > 0) {
+      const effectiveLocation = line.location || form.sourceLocation;
+      if (effectiveLocation) {
+        const availableValue = availabilityMap[`${line.itemCode.trim()}||${effectiveLocation}`];
+        if (availableValue !== undefined) {
+          const availableQty = toNumber(availableValue);
+          if (qty > availableQty + 0.001) {
+            errors.push(
+              `Line ${lineNo}: insufficient stock for ${line.itemCode} (available ${availableQty}).`
+            );
+          }
+        }
+      }
     }
   });
 

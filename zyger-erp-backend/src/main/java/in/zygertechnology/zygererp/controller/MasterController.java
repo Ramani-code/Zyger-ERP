@@ -109,6 +109,12 @@ public class MasterController {
     @GetMapping("/api/master/instruments/next-code")
     Map<String,String> nextInstrumentCode() { return Map.of("code", docNumbers.peek("instrument")); }
 
+    @GetMapping("/api/master/operators/next-code")
+    Map<String,String> nextOperatorCode() { return Map.of("code", docNumbers.peek("operator")); }
+
+    @GetMapping("/api/master/drawing-revisions/next-code")
+    Map<String,String> nextDrawingRevisionCode() { return Map.of("code", docNumbers.peek("drawing-revision")); }
+
     @GetMapping("/api/master/tools/next-code")
     Map<String,String> nextToolCode() { return Map.of("code", docNumbers.peek("tool")); }
 
@@ -619,6 +625,8 @@ public class MasterController {
     private final ToolMasterRepository toolMasters;
     private final CompanyInfoRepository companyInfos;
     private final MasterAuditLogRepository auditLogs;
+    private final OperatorMasterRepository operators;
+    private final DrawingRevisionRepository drawingRevisions;
 
     // ---- UOM Master ----
     @Cacheable(value = "masterRefs", key = "'uoms-' + (#activeOnly == null ? 'all' : #activeOnly)")
@@ -1064,14 +1072,20 @@ public class MasterController {
         return rackMasters.save(e);
     }
     @CacheEvict(cacheNames = {"masterRefs", "masterRefsByStore"}, allEntries = true)
-    @DeleteMapping("/api/master/racks/{id}") @Transactional void delRack(@PathVariable Long id){
-        rackMasters.findById(id).ifPresent(r -> {
-            List<BinMaster> bList = binMasters.findByRackId(id);
-            if (bList != null && !bList.isEmpty()) {
-                binMasters.deleteAll(bList);
-            }
-            rackMasters.delete(r);
-        });
+    @DeleteMapping("/api/master/racks/{id}") @Transactional Map<String,Object> delRack(@PathVariable Long id){
+        RackMaster r = rackMasters.findById(id).orElseThrow(() -> new RuntimeException("Rack not found"));
+        Map<String,Object> out = new LinkedHashMap<>();
+        List<BinMaster> bList = binMasters.findByRackId(id);
+        if (bList != null && !bList.isEmpty()) {
+            r.setActive(false);
+            rackMasters.save(r);
+            out.put("deleted", false); out.put("deactivated", true);
+            out.put("message", "Rack has " + bList.size() + " bin(s) and cannot be deleted. It has been deactivated instead.");
+            return out;
+        }
+        rackMasters.delete(r);
+        out.put("deleted", true); out.put("deactivated", false); out.put("message", "Rack deleted.");
+        return out;
     }
 
     // ---- Bin Master ----
@@ -1175,24 +1189,21 @@ public class MasterController {
         return stores.save(e);
     }
     @CacheEvict(cacheNames = {"masterRefs", "masterRefsByStore"}, allEntries = true)
-    @DeleteMapping("/api/master/stores/{id}") @Transactional void delStore(@PathVariable Long id){
-        stores.findById(id).ifPresent(s -> {
-            List<BinMaster> bList = binMasters.findByStoreId(id);
-            if (bList != null && !bList.isEmpty()) {
-                binMasters.deleteAll(bList);
-            }
-            List<RackMaster> rList = rackMasters.findByStoreId(id);
-            if (rList != null && !rList.isEmpty()) {
-                for (RackMaster r : rList) {
-                    List<BinMaster> rbList = binMasters.findByRackId(r.getId());
-                    if (rbList != null && !rbList.isEmpty()) {
-                        binMasters.deleteAll(rbList);
-                    }
-                }
-                rackMasters.deleteAll(rList);
-            }
-            stores.delete(s);
-        });
+    @DeleteMapping("/api/master/stores/{id}") @Transactional Map<String,Object> delStore(@PathVariable Long id){
+        StoreMaster s = stores.findById(id).orElseThrow(() -> new RuntimeException("Store not found"));
+        Map<String,Object> out = new LinkedHashMap<>();
+        long binCount = binMasters.findByStoreId(id) != null ? binMasters.findByStoreId(id).size() : 0;
+        long rackCount = rackMasters.findByStoreId(id) != null ? rackMasters.findByStoreId(id).size() : 0;
+        if (binCount > 0 || rackCount > 0) {
+            s.setActive(false);
+            stores.save(s);
+            out.put("deleted", false); out.put("deactivated", true);
+            out.put("message", "Store has " + rackCount + " rack(s) and " + binCount + " bin(s) and cannot be deleted. It has been deactivated instead.");
+            return out;
+        }
+        stores.delete(s);
+        out.put("deleted", true); out.put("deactivated", false); out.put("message", "Store deleted.");
+        return out;
     }
 
     private void applyStoreFields(StoreMaster s, Map<String,Object> b) {
@@ -1385,6 +1396,80 @@ public class MasterController {
     }
     @CacheEvict(cacheNames = {"masterRefs", "masterRefsByStore"}, allEntries = true)
     @DeleteMapping("/api/master/instruments/{id}") void delInstrument(@PathVariable Long id){ instruments.findById(id).ifPresent(i -> { i.setActive(false); instruments.save(i); }); }
+
+    // ---- Operator Master ----
+    @Cacheable(value = "masterRefs", key = "'operators'")
+    @GetMapping("/api/master/operators")
+    List<Map<String,Object>> operatorList() {
+        return operators.findAll().stream().filter(OperatorMaster::isActive).map(o -> {
+            Map<String,Object> m = new LinkedHashMap<>();
+            m.put("id", o.getId()); m.put("code", o.getCode()); m.put("name", o.getName());
+            m.put("skillCategory", o.getSkillCategory());
+            m.put("machineClassAuthorization", o.getMachineClassAuthorization());
+            m.put("certificationExpiry", o.getCertificationExpiry());
+            m.put("shift", o.getShift()); m.put("active", o.isActive());
+            return m;
+        }).toList();
+    }
+    @GetMapping("/api/master/operators/{id}") OperatorMaster getOperator(@PathVariable Long id){
+        return operators.findById(id).orElseThrow(() -> new RuntimeException("Operator not found"));
+    }
+    @CacheEvict(cacheNames = {"masterRefs", "masterRefsByStore"}, allEntries = true)
+    @PostMapping("/api/master/operators") OperatorMaster createOperator(@RequestBody OperatorMaster o){ o.setId(null); o.setCode(docNumbers.allocate("operator")); return operators.save(o); }
+    @CacheEvict(cacheNames = {"masterRefs", "masterRefsByStore"}, allEntries = true)
+    @PutMapping("/api/master/operators/{id}") @Transactional OperatorMaster updateOperator(@PathVariable Long id, @RequestBody ObjectNode body){
+        OperatorMaster e = operators.findById(id).orElseThrow(() -> new RuntimeException("Operator not found"));
+        OperatorMaster merged = mergePatch(e, body);
+        merged.setId(id); merged.setVersion(e.getVersion());
+        return operators.save(merged);
+    }
+    @CacheEvict(cacheNames = {"masterRefs", "masterRefsByStore"}, allEntries = true)
+    @DeleteMapping("/api/master/operators/{id}") void delOperator(@PathVariable Long id){ operators.findById(id).ifPresent(o -> { o.setActive(false); operators.save(o); }); }
+
+    // ---- Drawing & Revision Master ----
+    @Cacheable(value = "masterRefs", key = "'drawing-revisions'")
+    @GetMapping("/api/master/drawing-revisions")
+    List<Map<String,Object>> drawingRevisionList(@RequestParam(required=false) String drawingNumber) {
+        List<DrawingRevision> list = drawingNumber != null
+                ? drawingRevisions.findByDrawingNumberOrderByEffectiveDateDesc(drawingNumber)
+                : drawingRevisions.findAll();
+        return list.stream().map(d -> {
+            Map<String,Object> m = new LinkedHashMap<>();
+            m.put("id", d.getId()); m.put("drawingNumber", d.getDrawingNumber()); m.put("revision", d.getRevision());
+            m.put("effectiveDate", d.getEffectiveDate()); m.put("attachedFilePath", d.getAttachedFilePath());
+            m.put("status", d.getStatus());
+            return m;
+        }).toList();
+    }
+    @GetMapping("/api/master/drawing-revisions/{id}") DrawingRevision getDrawingRevision(@PathVariable Long id){
+        return drawingRevisions.findById(id).orElseThrow(() -> new RuntimeException("Drawing revision not found"));
+    }
+    /** Saving a new revision as Active auto-supersedes the prior Active row for the same drawing number
+     * (same pattern as Master Data's InspectionPlan revision/retirement rule). */
+    @CacheEvict(cacheNames = {"masterRefs", "masterRefsByStore"}, allEntries = true)
+    @PostMapping("/api/master/drawing-revisions") @Transactional DrawingRevision createDrawingRevision(@RequestBody DrawingRevision d){
+        d.setId(null);
+        if (d.getStatus() == null || d.getStatus().isBlank()) d.setStatus("Active");
+        if ("Active".equalsIgnoreCase(d.getStatus()) && d.getDrawingNumber() != null) {
+            drawingRevisions.findByDrawingNumberAndStatus(d.getDrawingNumber(), "Active")
+                    .forEach(prior -> { prior.setStatus("Superseded"); drawingRevisions.save(prior); });
+        }
+        return drawingRevisions.save(d);
+    }
+    @CacheEvict(cacheNames = {"masterRefs", "masterRefsByStore"}, allEntries = true)
+    @PutMapping("/api/master/drawing-revisions/{id}") @Transactional DrawingRevision updateDrawingRevision(@PathVariable Long id, @RequestBody ObjectNode body){
+        DrawingRevision e = drawingRevisions.findById(id).orElseThrow(() -> new RuntimeException("Drawing revision not found"));
+        DrawingRevision merged = mergePatch(e, body);
+        merged.setId(id); merged.setVersion(e.getVersion());
+        if ("Active".equalsIgnoreCase(merged.getStatus()) && merged.getDrawingNumber() != null) {
+            drawingRevisions.findByDrawingNumberAndStatus(merged.getDrawingNumber(), "Active").stream()
+                    .filter(prior -> !prior.getId().equals(id))
+                    .forEach(prior -> { prior.setStatus("Superseded"); drawingRevisions.save(prior); });
+        }
+        return drawingRevisions.save(merged);
+    }
+    @CacheEvict(cacheNames = {"masterRefs", "masterRefsByStore"}, allEntries = true)
+    @DeleteMapping("/api/master/drawing-revisions/{id}") void delDrawingRevision(@PathVariable Long id){ drawingRevisions.findById(id).ifPresent(d -> { d.setStatus("Superseded"); drawingRevisions.save(d); }); }
 
     // ---- Tool Master ----
     @Cacheable(value = "masterRefs", key = "'tools'")

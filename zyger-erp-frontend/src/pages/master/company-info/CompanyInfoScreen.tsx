@@ -13,6 +13,7 @@ export interface CompanyInfoState {
   city: string;
   state: string;
   pincode: string;
+  phone: string;
   mobile: string;
   email: string;
   website: string;
@@ -22,6 +23,13 @@ export interface CompanyInfoState {
   tanNo: string;
   latitude: string;
   longitude: string;
+
+  // Banking (shown as Bank Transfer Details on the tax invoice)
+  bankName: string;
+  bankAccountHolder: string;
+  bankAccount: string;
+  bankIfsc: string;
+  bankBranch: string;
 
   // Statutory
   pan: string;
@@ -56,6 +64,7 @@ const defaultCompanyState: CompanyInfoState = {
   city: '',
   state: '',
   pincode: '',
+  phone: '',
   mobile: '+91 00000 00000',
   email: 'info@company.com',
   website: 'https://www.company.com',
@@ -65,6 +74,12 @@ const defaultCompanyState: CompanyInfoState = {
   tanNo: '',
   latitude: '12.9716° N',
   longitude: '77.5946° E',
+
+  bankName: '',
+  bankAccountHolder: '',
+  bankAccount: '',
+  bankIfsc: '',
+  bankBranch: '',
 
   pan: '',
   pfNo: '',
@@ -95,6 +110,7 @@ export default function CompanyInfoScreen() {
   const [openSec, setOpenSec] = useState({
     comm: true,
     stat: true,
+    bank: true,
     sec: true,
     logos: true,
   });
@@ -283,6 +299,10 @@ export default function CompanyInfoScreen() {
                 <input className="in" type="text" placeholder="+91 00000 00000" value={form.mobile} onChange={e => setFld('mobile', e.target.value)} />
               </label>
               <label className="fld">
+                <span>PHONE NO</span>
+                <input className="in" type="text" placeholder="+91 00000 00000" value={form.phone} onChange={e => setFld('phone', e.target.value)} />
+              </label>
+              <label className="fld">
                 <span>EMAIL</span>
                 <input className="in" type="email" placeholder="info@company.com" value={form.email} onChange={e => setFld('email', e.target.value)} />
               </label>
@@ -411,7 +431,47 @@ export default function CompanyInfoScreen() {
           </div>
         )}
 
-        {/* SECTION 3: Security */}
+        {/* SECTION 3: Bank Transfer Details */}
+        <div className="sec-head" onClick={() => toggleSec('bank')} style={{ cursor: 'pointer' }}>
+          <div className="sec-title">
+            <span className="material-symbols-rounded">account_balance</span>
+            <span>Bank Transfer Details</span>
+          </div>
+          <span className="material-symbols-rounded sec-toggle">{openSec.bank ? 'expand_less' : 'expand_more'}</span>
+        </div>
+
+        {openSec.bank && (
+          <div className="sec-body" style={{ background: '#fff', border: '1px solid #bfdbfe', borderRadius: '0 0 12px 12px', padding: '24px', marginBottom: '24px' }}>
+            <div className="fgrid" style={{ gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px', marginBottom: '20px' }}>
+              <label className="fld">
+                <span>BANK NAME</span>
+                <input className="in" type="text" placeholder="e.g. HDFC Bank" value={form.bankName} onChange={e => setFld('bankName', e.target.value)} />
+              </label>
+              <label className="fld">
+                <span>ACCOUNT NAME</span>
+                <input className="in" type="text" placeholder="Account holder name" value={form.bankAccountHolder} onChange={e => setFld('bankAccountHolder', e.target.value)} />
+              </label>
+              <label className="fld">
+                <span>ACCOUNT NO</span>
+                <input className="in" type="text" placeholder="Bank account number" value={form.bankAccount} onChange={e => setFld('bankAccount', e.target.value)} />
+              </label>
+
+              <label className="fld">
+                <span>IFSC CODE</span>
+                <input className="in" type="text" placeholder="e.g. HDFC0000001" value={form.bankIfsc} onChange={e => setFld('bankIfsc', e.target.value)} />
+              </label>
+              <label className="fld span2">
+                <span>BRANCH</span>
+                <input className="in" type="text" placeholder="e.g. Coimbatore" value={form.bankBranch} onChange={e => setFld('bankBranch', e.target.value)} />
+              </label>
+            </div>
+            <div style={{ fontSize: '0.82rem', color: '#64748b' }}>
+              These details are printed in the "Bank Transfer Details" section of your Tax Invoice.
+            </div>
+          </div>
+        )}
+
+        {/* SECTION 4: Security */}
         <div className="sec-head" onClick={() => toggleSec('sec')} style={{ cursor: 'pointer' }}>
           <div className="sec-title">
             <span className="material-symbols-rounded">security</span>
@@ -454,7 +514,7 @@ export default function CompanyInfoScreen() {
           </div>
         )}
 
-        {/* SECTION 4: Company Logos */}
+        {/* SECTION 5: Company Logos */}
         <div className="sec-head" onClick={() => toggleSec('logos')} style={{ cursor: 'pointer' }}>
           <div className="sec-title">
             <span className="material-symbols-rounded">image</span>

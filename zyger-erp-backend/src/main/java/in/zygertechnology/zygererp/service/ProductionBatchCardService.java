@@ -319,6 +319,9 @@ public class ProductionBatchCardService {
             throw new IllegalArgumentException("Item '" + card.getItemCode()
                     + "' does not exist in the item master.");
         }
+        // `batchControl` and `requiresBatch` are independently meaningful (either one alone
+        // marks the item batch-controlled) — confirmed by this test class's deliberate
+        // batchControl=true/requiresBatch=false case; not safe to collapse to one flag.
         boolean controlled = Boolean.TRUE.equals(item.get().getBatchControl())
                 || Boolean.TRUE.equals(item.get().getRequiresBatch());
         if (!controlled) {

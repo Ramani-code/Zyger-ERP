@@ -40,6 +40,8 @@ public class ProductionJobCardService {
     private final ProductionStockBoundary inventory;
     private final ProductionQualityGateService qualityGate;
     private final jakarta.persistence.EntityManager em;
+    private final ProductionPolicyRepository productionPolicies;
+    private final MachineCapabilityRepository machineCapabilities;
 
     public ProductionJobCardService(
             JobCardRepository jobCards,
@@ -52,7 +54,9 @@ public class ProductionJobCardService {
             DocNumberService numbers,
             ProductionStockBoundary inventory,
             ProductionQualityGateService qualityGate,
-            jakarta.persistence.EntityManager em) {
+            jakarta.persistence.EntityManager em,
+            ProductionPolicyRepository productionPolicies,
+            MachineCapabilityRepository machineCapabilities) {
         this.jobCards = jobCards;
         this.jobCardSubjobs = jobCardSubjobs;
         this.workOrders = workOrders;
@@ -64,6 +68,23 @@ public class ProductionJobCardService {
         this.inventory = inventory;
         this.qualityGate = qualityGate;
         this.em = em;
+        this.productionPolicies = productionPolicies;
+        this.machineCapabilities = machineCapabilities;
+    }
+
+    /**
+     * Production Module FRS §4.1/§5.2 (audit gap): filters machine choice by capability
+     * matrix — but only once a machine actually has capability rows defined. A machine
+     * with none is left unrestricted, so every machine already in the system today (none
+     * of which has ever had capability data) keeps working exactly as before.
+     */
+    private void assertMachineCapable(String machineCode, String operationCode) {
+        if (operationCode == null || operationCode.isBlank()) return;
+        if (!machineCapabilities.existsByMachineCodeAndActiveTrue(machineCode)) return;
+        if (!machineCapabilities.existsByMachineCodeAndOperationCodeAndActiveTrue(machineCode, operationCode)) {
+            throw new RuntimeException("Machine '" + machineCode + "' is not set up to run operation '"
+                    + operationCode + "' per its capability matrix.");
+        }
     }
 
     private static String user(java.security.Principal p) { return p != null ? p.getName() : "system"; }
@@ -341,12 +362,32 @@ public class ProductionJobCardService {
                     // Allow completion but warn
                 }
 
-                // Overproduction check: total output must not exceed planned + 10% tolerance
+                // Overproduction check: total output must not exceed planned + configured
+                // tolerance (Production Policy §10 Q2) — a Production Supervisor/Plant Head
+                // may override with a mandatory reason, matching the FRS's supervisor-override
+                // intent instead of leaving this an unconditional hard block.
                 BigDecimal plannedQty = jc.getPlannedQuantity() == null ? BigDecimal.ZERO : jc.getPlannedQuantity();
                 BigDecimal totalOutput = totalGood.add(totalRework);
-                BigDecimal tolerance = plannedQty.multiply(new BigDecimal("0.10"));
-                if (plannedQty.compareTo(BigDecimal.ZERO) > 0 && totalOutput.compareTo(plannedQty.add(tolerance)) > 0) {
-                    errors.add("Overproduction detected: completed " + totalOutput + " against planned " + plannedQty + " (max allowed: " + plannedQty.add(tolerance) + ")");
+                ProductionPolicy policy = productionPolicies.findFirstByActiveTrue().orElseGet(ProductionPolicy::new);
+                BigDecimal tolerancePct = policy.getOverproductionTolerancePercent() != null
+                        ? policy.getOverproductionTolerancePercent() : new BigDecimal("10.00");
+                BigDecimal tolerance = plannedQty.multiply(tolerancePct).divide(new BigDecimal("100"));
+                BigDecimal maxAllowed = plannedQty.add(tolerance);
+                if (plannedQty.compareTo(BigDecimal.ZERO) > 0 && totalOutput.compareTo(maxAllowed) > 0) {
+                    // A mandatory reason (reusing this action's existing "note" field, since
+                    // no separate override-reason field is exposed by this endpoint) from a
+                    // Production Supervisor/Plant Head clears the block; otherwise it's added
+                    // to the same errors list as every other completion check above/below.
+                    boolean authorized = note != null && !note.isBlank()
+                            && in.zygertechnology.zygererp.security.CurrentUserRoles.hasAnyRole(
+                                    "ADMIN", "PRODUCTION_SUPERVISOR", "PLANT_HEAD");
+                    if (!authorized) {
+                        errors.add("Overproduction detected: completed " + totalOutput + " against planned " + plannedQty
+                                + " (max allowed: " + maxAllowed + "). A Production Supervisor/Plant Head can "
+                                + "override this by re-submitting Complete with a reason in the remarks.");
+                    } else {
+                        jc.setOverrideReason(note);
+                    }
                 }
 
                 if (!errors.isEmpty()) {
@@ -508,6 +549,7 @@ public class ProductionJobCardService {
             if (!machines.existsByCode(sj.getMachineCode())) {
                 throw new RuntimeException("Machine code '" + sj.getMachineCode() + "' does not exist");
             }
+            assertMachineCapable(sj.getMachineCode(), sj.getOperationCode());
         }
         sj.setId(null);
         sj.setJobCard(jc);
@@ -542,8 +584,8 @@ public class ProductionJobCardService {
     public JobCardSubjob subjobAction(Long lineId, String action, java.security.Principal p) {
         JobCardSubjob sj = jobCardSubjobs.findById(lineId).orElseThrow(() -> new RuntimeException("Subjob not found"));
         switch (action.toLowerCase()) {
-            case "release": sj.setStatus("RELEASED"); break;
-            case "start": sj.setStatus("IN_PROGRESS"); sj.setStartTime(Instant.now()); break;
+            case "release": assertPredecessorsComplete(sj, "released"); sj.setStatus("RELEASED"); break;
+            case "start": assertPredecessorsComplete(sj, "started"); sj.setStatus("IN_PROGRESS"); sj.setStartTime(Instant.now()); break;
             case "hold": sj.setStatus("ON_HOLD"); break;
             case "quality-hold": sj.setStatus("QUALITY_HOLD"); break;
             case "production-hold": sj.setStatus("PRODUCTION_HOLD"); break;
@@ -560,6 +602,7 @@ public class ProductionJobCardService {
                 // operation's inspection is PENDING/FAIL/HELD without an approved override.
                 qualityGate.assertSubjobGate(sj, user(p));
                 sj.setStatus("COMPLETED"); sj.setEndTime(Instant.now());
+                autoReleaseNextSubjob(sj);
                 break;
             }
             case "cancel": {
@@ -574,5 +617,59 @@ public class ProductionJobCardService {
         sj.setUpdatedAt(Instant.now());
         sj.setUpdatedBy(user(p));
         return jobCardSubjobs.save(sj);
+    }
+
+    /**
+     * Production Module FRS §5.2 (audit gap): the sequential-dependency gate previously only
+     * blocked posting a production QUANTITY against an out-of-sequence operation
+     * (ProductionEntryValidationService.validateSequenceAndPending) — nothing stopped a
+     * supervisor from releasing or starting that operation's Job Card subjob in the first
+     * place. This closes that: a subjob can't be released/started while any lower-sequence
+     * sibling on the same Job Card is still open.
+     */
+    /**
+     * Production Module FRS §5.3 BR (audit gap): "operation status auto-updates to Completed
+     * and triggers auto-creation/release of the next operation's Job Card." Since Job Cards
+     * stay per-full-order-quantity (all operations pre-created as subjobs upfront — no
+     * batch/shift split), there is nothing to auto-CREATE; this closes the auto-RELEASE half,
+     * moving the immediate next-sequence subjob from PENDING to RELEASED once its
+     * predecessor (the one that just completed) clears. Silently no-ops if there is no next
+     * PENDING subjob, or if it's already past PENDING — never overrides a subjob a
+     * supervisor already put on hold or started manually.
+     */
+    private void autoReleaseNextSubjob(JobCardSubjob completed) {
+        if (completed.getSequenceNo() == null || completed.getJobCard() == null || completed.getJobCard().getId() == null) return;
+        List<JobCardSubjob> siblings = jobCardSubjobs.findByJobCardId(completed.getJobCard().getId());
+        siblings.stream()
+                .filter(s -> s.getSequenceNo() != null && s.getSequenceNo() > completed.getSequenceNo())
+                .filter(s -> "PENDING".equalsIgnoreCase(s.getStatus()))
+                .min(Comparator.comparing(JobCardSubjob::getSequenceNo))
+                .ifPresent(next -> {
+                    try {
+                        assertPredecessorsComplete(next, "released");
+                        next.setStatus("RELEASED");
+                        next.setUpdatedAt(Instant.now());
+                        jobCardSubjobs.save(next);
+                    } catch (RuntimeException ignored) {
+                        // Another lower-sequence sibling is still open — leave it PENDING;
+                        // it'll be released manually or by that sibling's own completion.
+                    }
+                });
+    }
+
+    private void assertPredecessorsComplete(JobCardSubjob sj, String actionVerb) {
+        Integer mySeq = sj.getSequenceNo();
+        if (mySeq == null || sj.getJobCard() == null || sj.getJobCard().getId() == null) return;
+        List<JobCardSubjob> siblings = jobCardSubjobs.findByJobCardId(sj.getJobCard().getId());
+        for (JobCardSubjob sib : siblings) {
+            if (sib.getId() != null && sib.getId().equals(sj.getId())) continue;
+            int sibSeq = sib.getSequenceNo() != null ? sib.getSequenceNo() : 0;
+            if (sibSeq < mySeq
+                    && !"COMPLETED".equalsIgnoreCase(sib.getStatus())
+                    && !"CANCELLED".equalsIgnoreCase(sib.getStatus())) {
+                throw new RuntimeException("Cannot be " + actionVerb + ": prerequisite operation '"
+                        + sib.getOperationCode() + "' (seq " + sibSeq + ") is not yet completed.");
+            }
+        }
     }
 }

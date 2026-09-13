@@ -105,6 +105,12 @@ public class JobCard {
     @Column(name = "complete_remarks", length = 500)
     private String completeRemarks;
 
+    /** Production Module FRS §5.3 BR: reason a Production Supervisor/Plant Head gave to
+     * override the overproduction-tolerance block at completion. Null when no override
+     * was needed. */
+    @Column(name = "override_reason", length = 500)
+    private String overrideReason;
+
     @Column(name = "hold_reason", length = 255)
     private String holdReason;
 

@@ -261,8 +261,14 @@ class ProductionEntryValidationServiceTest {
                 .thenReturn(List.of(draftEntry));
 
         // Available pending = 100 - 60 - 20 = 20. Attempting 30.
+        // Now a BusinessRuleException (OVERPRODUCTION_LIMIT) rather than a plain
+        // IllegalArgumentException, since a Production Supervisor/Plant Head override with a
+        // reason can clear it (Production Module FRS §5.3 BR) — no override supplied here,
+        // so it still blocks, just with a more specific/overridable exception type.
         validEntry.setProcessQty(new BigDecimal("30"));
-        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> validationService.validateSequenceAndPending(validEntry));
+        in.zygertechnology.zygererp.config.BusinessRuleException ex = assertThrows(
+                in.zygertechnology.zygererp.config.BusinessRuleException.class,
+                () -> validationService.validateSequenceAndPending(validEntry));
         assertTrue(ex.getMessage().contains("exceeds the available pending quantity"));
     }
 

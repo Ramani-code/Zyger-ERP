@@ -172,13 +172,16 @@ export function buildLineFields(qtyField: string, _inwardType?: InwardType): Inw
     { key: 'rejectedQty', label: 'Rejected', type: 'number' },
   ];
 
-  // Batch/Heat No render for every inward type, PO_INWARD included: the backend validates
-  // requiresBatch/requiresHeat unconditionally for all four (DocumentFacade.validateBatchHeat),
-  // so excluding them here for PO_INWARD only made saving impossible for any item flagged as
-  // requiring one — there was no field on this screen to enter it.
+  // Batch/Heat/Lot/Serial No render for every inward type, PO_INWARD included, so there's
+  // always a field to enter them when the received item needs traceability — batchNo/heatNo
+  // were already here; lotNo/serialNo exist on the line entity (BaseLine) but had no field on
+  // this screen at all until now (Inward Entry FRD v2.0 §6.2, closes as-is Open Question Q5).
+  // None of these four are currently enforced as mandatory server-side.
   fields.push(
     { key: 'batchNo', label: 'Batch No', type: 'text' },
-    { key: 'heatNo', label: 'Heat No', type: 'text' }
+    { key: 'heatNo', label: 'Heat No', type: 'text' },
+    { key: 'lotNo', label: 'Lot No', type: 'text' },
+    { key: 'serialNo', label: 'Serial No', type: 'text' }
   );
 
   fields.push(

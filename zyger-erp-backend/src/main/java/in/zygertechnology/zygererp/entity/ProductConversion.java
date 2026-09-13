@@ -42,6 +42,22 @@ public class ProductConversion {
     @Column(name = "output_uom", length = 20) String outputUom;
     @Column(name = "process_loss_qty", precision = 14, scale = 4) BigDecimal processLossQty;
     @Column(name = "scrap_qty", precision = 14, scale = 4) BigDecimal scrapQty;
+    /** Production Module FRS §5.7 BR: the designated scrap/by-product item this conversion's
+     * chips/turnings post into as sellable FREE stock. Optional — left blank, scrap remains
+     * an informational quantity only (unchanged from before), since InventoryIntegrationService
+     * deliberately does not accept a SCRAP stock-status through this boundary (see its D-C1
+     * note) — scrap must be its own countable item, not a status flag on the input material. */
+    @Column(name = "scrap_item_code", length = 60) String scrapItemCode;
+    @Column(name = "scrap_location", length = 60) String scrapLocation;
+
+    /** Production Module FRS §5.7 BR: theoretical consumption (output qty x the output
+     * item's Item Master standard weight) computed and stored at post time, for
+     * traceability — null when the output item has no standard weight on record. */
+    @Column(name = "theoretical_consumption_qty", precision = 14, scale = 4) BigDecimal theoreticalConsumptionQty;
+    /** True when actual inputQuantity exceeded theoreticalConsumptionQty by more than the
+     * plant-wide materialConsumptionTolerancePercent (ProductionPolicy) — a flag for
+     * supervisor review, not a block; the FRS asks this to be flagged, not stopped. */
+    @Column(name = "material_variance_flagged") @Builder.Default Boolean materialVarianceFlagged = false;
 
     @Column(length = 30) @Builder.Default String status = "DRAFT";
     @Column(length = 500) String remarks;

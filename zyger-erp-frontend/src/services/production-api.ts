@@ -39,6 +39,7 @@ const ENDPOINTS = {
   idleTime: `${PRODUCTION_BASE}/idle-time`,
   pending: `${PRODUCTION_BASE}/pending`,
   dashboard: `${PRODUCTION_BASE}/dashboard`,
+  toolLife: `${PRODUCTION_BASE}/tool-life`,
 } as const;
 
 export const productionApi = {
@@ -242,6 +243,17 @@ export const productionApi = {
   printDocument(docType: string, id: number | string, mode: 'print' | 'download' = 'print') {
     const base = import.meta.env.VITE_API_BASE_URL || '/api';
     printDoc(`${base}${PRODUCTION_BASE}/${docType}/${id}/print?download=${mode === 'download'}`, mode);
+  },
+
+  // ─── Tool Life / Tool Change Entry ───────────────────────────────────────
+  async listToolLife(params?: { toolCode?: string; jobCardNumber?: string }): Promise<unknown[]> {
+    const response = await apiClient.get<unknown[]>(ENDPOINTS.toolLife, { params });
+    return response.data;
+  },
+
+  async createToolLife(payload: Record<string, unknown>): Promise<unknown> {
+    const response = await apiClient.post(ENDPOINTS.toolLife, payload);
+    return response.data;
   },
 };
 

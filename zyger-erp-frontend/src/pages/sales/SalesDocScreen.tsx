@@ -30,11 +30,14 @@ interface SalesDocScreenProps {
   initialDocId?: string | number;
   viewOnly?: boolean;
   defaultType?: string;
+  /** Pre-applies a status filter on the list view — used for dashboard KPI
+   * card click-through (e.g. "Pending Approval" opens straight to that filter). */
+  initialStatus?: string;
 }
 
-type ActionModal = { action: 'submit' | 'approve' | 'reject' | 'reopen' | 'cancel'; danger: boolean };
+type ActionModal = { action: 'submit' | 'approve' | 'reject' | 'reopen' | 'cancel' | 'post'; danger: boolean };
 
-export default function SalesDocScreen({ config, initialDocId, viewOnly = false, defaultType }: SalesDocScreenProps) {
+export default function SalesDocScreen({ config, initialDocId, viewOnly = false, defaultType, initialStatus }: SalesDocScreenProps) {
   const { toast } = useToast();
   const { user, can } = useAuth();
   const { docType } = config;
@@ -45,7 +48,7 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
 
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
-  const [status, setStatus] = useState('');
+  const [status, setStatus] = useState(initialStatus ?? '');
   const [page, setPage] = useState(0);
   const [deleteTarget, setDeleteTarget] = useState<Record<string, unknown> | null>(null);
 
@@ -764,6 +767,19 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
         }
       }
 
+      // BR-INV-SDC-2 / FRS §08.1: currentDispatchQty must never exceed the SO line's
+      // pendingQty (soQty − previouslyDispatchedQty) — the backend already rejects an
+      // over-dispatch on post, but that's a late, generic error; capping here gives
+      // immediate feedback instead of a round-trip failure.
+      if (fieldKey === 'dispatchQty' && docType === 'sales-dc') {
+        const pending = row.pendingQty !== undefined && row.pendingQty !== null ? Number(row.pendingQty) : null;
+        const requested = Number(value);
+        if (pending !== null && Number.isFinite(pending) && requested > pending) {
+          row.dispatchQty = pending;
+          toast(`Dispatch Quantity cannot exceed pending quantity (${pending})`, 'error');
+        }
+      }
+
       // Recalculate row amounts
       const qty = Number(row.qty ?? row.billedQty ?? row.dispatchQty ?? row.orderedQty ?? row.currentReturnQty ?? 1);
       const price = Number(row.unitPrice ?? 0);
@@ -835,10 +851,14 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
     }
   };
 
-  const handleAction = async () => {
+  const handleAction = async (note: string) => {
     if (!actionModal || !documentId) return;
+    if (actionModal.action === 'reject' && !note.trim()) {
+      toast('A reason is required to reject this document.', 'error');
+      return;
+    }
     try {
-      await actionMutation.mutateAsync({ id: documentId, action: actionModal.action });
+      await actionMutation.mutateAsync({ id: documentId, action: actionModal.action, note });
       toast(`Sales Document ${actionModal.action}d successfully!`, 'success');
       setActionModal(null);
       backToList();
@@ -1107,13 +1127,49 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
               Submit
             </button>
           )}
-          {documentId && String(form.status) === 'SUBMITTED' && can('sales', 'Approve') && (
+          {documentId && ['SUBMITTED', 'PENDING_TIER1', 'PENDING_TIER2', 'PENDING_TIER3'].includes(String(form.status)) && can('sales', 'Approve') && (
             <button
               onClick={() => setActionModal({ action: 'approve', danger: false })}
               className="btn btn-p"
             >
               <span className="material-symbols-rounded">check_circle</span>
-              Approve
+              Approve{String(form.status).startsWith('PENDING_TIER') ? ` (${String(form.status).replace('PENDING_', '')})` : ''}
+            </button>
+          )}
+          {documentId && ['SUBMITTED', 'PENDING_TIER1', 'PENDING_TIER2', 'PENDING_TIER3'].includes(String(form.status)) && (
+            <button
+              onClick={() => setActionModal({ action: 'reject', danger: true })}
+              className="btn btn-d"
+            >
+              <span className="material-symbols-rounded">cancel</span>
+              Reject
+            </button>
+          )}
+          {documentId && String(form.status) === 'REJECTED' && (
+            <button
+              onClick={() => setActionModal({ action: 'reopen', danger: false })}
+              className="btn btn-g"
+            >
+              <span className="material-symbols-rounded">restart_alt</span>
+              Reopen
+            </button>
+          )}
+          {documentId && String(form.status) === 'APPROVED' && (
+            <button
+              onClick={() => setActionModal({ action: 'post', danger: false })}
+              className="btn btn-p"
+            >
+              <span className="material-symbols-rounded">task_alt</span>
+              Post
+            </button>
+          )}
+          {documentId && ['DRAFT', 'SUBMITTED', 'PENDING_TIER1', 'PENDING_TIER2', 'PENDING_TIER3', 'APPROVED', 'CONFIRMED', 'POSTED', 'RECEIVED'].includes(String(form.status)) && (
+            <button
+              onClick={() => setActionModal({ action: 'cancel', danger: true })}
+              className="btn btn-d"
+            >
+              <span className="material-symbols-rounded">block</span>
+              Cancel
             </button>
           )}
         </div>
@@ -1415,7 +1471,7 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
           Fill all mandatory header and item details before submitting.
         </div>
         <button type="button" onClick={backToList} className="btn">
-          Cancel
+          Close
         </button>
         {editable && (
           <button type="button" onClick={() => handleSave()} disabled={isBusy} className="btn btn-p">
@@ -1432,7 +1488,7 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
           body={`Are you sure you want to ${actionModal.action} this sales document?`}
           okLabel={actionModal.action.toUpperCase()}
           danger={actionModal.danger}
-          onConfirm={() => handleAction()}
+          onConfirm={(note) => handleAction(note)}
           onClose={() => setActionModal(null)}
         />
       )}

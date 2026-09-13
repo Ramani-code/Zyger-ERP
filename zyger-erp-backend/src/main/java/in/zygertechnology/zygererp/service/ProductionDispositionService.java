@@ -580,6 +580,9 @@ public class ProductionDispositionService {
         if (item.isEmpty()) {
             throw new IllegalArgumentException("Item '" + itemCode + "' does not exist in the item master.");
         }
+        // `batchControl` and `requiresBatch` are independently meaningful (either one alone
+        // marks the item batch-controlled) — confirmed by ProductionBatchCardServiceTest's
+        // deliberate batchControl=true/requiresBatch=false case; not safe to collapse to one.
         return Boolean.TRUE.equals(item.get().getBatchControl())
                 || Boolean.TRUE.equals(item.get().getRequiresBatch());
     }

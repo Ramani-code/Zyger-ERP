@@ -5,14 +5,21 @@ import { getApiErrorMessage } from '../../../utils/apiError';
 import { exportSimpleCsv } from '../../../utils/csvExport';
 import { formatNumber } from '../../../utils/format';
 
-type SummaryReportType = 'rejection' | 'rework' | 'idle' | 'machine' | 'operator';
+type SummaryReportType =
+  | 'rejection' | 'rework' | 'idle' | 'machine' | 'operator'
+  | 'daily-production' | 'shift' | 'wip' | 'tool-consumption' | 'order-status';
 
 const SUMMARY_REPORTS: { key: SummaryReportType; label: string; icon: string; desc: string }[] = [
+  { key: 'daily-production', label: 'Daily Production', icon: 'calendar_today', desc: 'Good/rejected/rework/scrap qty by date' },
   { key: 'rejection', label: 'Rejection', icon: 'block', desc: 'Rejection reason-wise summary' },
   { key: 'rework', label: 'Rework', icon: 'replay', desc: 'Rework reason & routing summary' },
   { key: 'idle', label: 'Idle', icon: 'schedule', desc: 'Idle reason & duration summary' },
-  { key: 'machine', label: 'Machine', icon: 'precision_manufacturing', desc: 'Machine-wise production summary' },
-  { key: 'operator', label: 'Operator', icon: 'engineering', desc: 'Operator-wise production summary' },
+  { key: 'machine', label: 'Machine', icon: 'precision_manufacturing', desc: 'Machine-wise output, quality & utilization %' },
+  { key: 'operator', label: 'Operator', icon: 'engineering', desc: 'Operator-wise output & efficiency %' },
+  { key: 'shift', label: 'Shift-wise', icon: 'groups', desc: 'Shift-wise output, rejection % & manpower' },
+  { key: 'wip', label: 'WIP', icon: 'inventory_2', desc: 'Work-in-process qty by operation, with ageing' },
+  { key: 'tool-consumption', label: 'Tool Life', icon: 'construction', desc: 'Tool usage vs. rated life, replacement alerts' },
+  { key: 'order-status', label: 'Order Status', icon: 'local_shipping', desc: 'Planned vs. actual completion, delay tracking' },
 ];
 
 interface DashboardSummary {

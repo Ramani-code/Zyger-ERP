@@ -15,6 +15,8 @@ export interface ItemMasterDto {
   groupItemType?: string;
   defaultReceivingStore?: string;
   inspectionRequired?: boolean;
+  purchaseUom?: string;
+  conversionFactor?: number;
 }
 
 export interface SupplierDto {

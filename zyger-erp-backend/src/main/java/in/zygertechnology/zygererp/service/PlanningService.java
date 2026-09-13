@@ -29,6 +29,7 @@ public class PlanningService {
     private final ProcessMasterRepository processRepo;
     private final in.zygertechnology.zygererp.repository.ResourceMasterRepository resourceRepo;
     private final DocStatusHistoryRepository docStatusHistoryRepo;
+    private final ProductionJobCardService productionJobCardService;
 
     public boolean isPlanning(String key) { return PLANNING_KEYS.contains(key); }
 
@@ -405,6 +406,10 @@ public class PlanningService {
                 }
                 next = "APPROVED";
                 wo.setApprovedBy(user);
+                // Production Module FRS §7 BR: snapshot at approval, so release can tell
+                // whether qty/due date were edited afterward (a deviation).
+                wo.setApprovedQuantity(wo.getOrderQuantity());
+                wo.setApprovedDueDate(wo.getDueDate());
             }
             case "reject" -> {
                 requireStatus(current, "SUBMITTED");
@@ -417,6 +422,27 @@ public class PlanningService {
             case "release" -> {
                 requireStatus(current, "APPROVED");
                 validateWoCanRelease(wo);
+                // Production Module FRS §7 BR: auto-release only when qty/due date still
+                // match what was approved; a deviation since approval needs a Production
+                // Supervisor/Plant Head to authorize the release with a reason.
+                boolean qtyDeviates = wo.getApprovedQuantity() != null
+                        && wo.getOrderQuantity() != null && wo.getApprovedQuantity().compareTo(wo.getOrderQuantity()) != 0;
+                boolean dateDeviates = wo.getApprovedDueDate() != null
+                        && wo.getDueDate() != null && !wo.getApprovedDueDate().isEqual(wo.getDueDate());
+                if (qtyDeviates || dateDeviates) {
+                    boolean authorized = note != null && !note.isBlank()
+                            && in.zygertechnology.zygererp.security.CurrentUserRoles.hasAnyRole(
+                                    "ADMIN", "PRODUCTION_SUPERVISOR", "PLANT_HEAD");
+                    if (!authorized) {
+                        throw new in.zygertechnology.zygererp.config.BusinessRuleException("RELEASE_DEVIATION",
+                                "Order quantity/due date changed since approval (approved: "
+                                        + wo.getApprovedQuantity() + " qty, due " + wo.getApprovedDueDate()
+                                        + " -> now: " + wo.getOrderQuantity() + " qty, due " + wo.getDueDate()
+                                        + "). A Production Supervisor/Plant Head can authorize release with a reason.",
+                                Map.of("approvedQuantity", String.valueOf(wo.getApprovedQuantity()),
+                                        "currentQuantity", String.valueOf(wo.getOrderQuantity())));
+                    }
+                }
                 next = "RELEASED";
                 wo.setReleasedBy(user);
                 wo.setReleasedQty(wo.getOrderQuantity());
@@ -430,6 +456,17 @@ public class PlanningService {
                 }
                 // FRS §10.6: snapshot BOM and Route revision on release
                 snapshotBomRouteRevision(wo);
+                // Production Module FRS §5.1/§5.2: Release must auto-generate the Job Card
+                // (with one subjob per Route operation) — this used to be a separate manual
+                // step the user could forget; Draft still creates none, matching the FRS.
+                try {
+                    Map<String, Object> jcBody = new HashMap<>();
+                    jcBody.put("workOrderNumber", wo.getDocNo() != null ? wo.getDocNo() : wo.getWoNumber());
+                    java.security.Principal principal = () -> user;
+                    productionJobCardService.createFromWorkOrder(jcBody, principal);
+                } catch (Exception ex) {
+                    throw new IllegalStateException("Failed to auto-generate Job Card on release: " + ex.getMessage(), ex);
+                }
             }
             case "start" -> {
                 requireStatus(current, "RELEASED", "ON_HOLD");

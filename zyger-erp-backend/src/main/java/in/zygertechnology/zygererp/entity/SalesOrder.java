@@ -24,6 +24,11 @@ public class SalesOrder extends BaseDoc implements DocEntity {
     @Column(name="billing_address", length=500) String billingAddress;
     @Column(name="shipping_address", length=500) String shippingAddress;
     @Column(length=30) String currency;
+    /** GST compliance — customer's GSTIN, captured at order time. */
+    @Column(name="customer_gstin", length=15) String customerGstin;
+    /** GST state code determining CGST+SGST vs IGST on the resulting invoice. */
+    /** Length 100 — see the matching note on SalesInvoice.placeOfSupply. */
+    @Column(name="place_of_supply", length=100) String placeOfSupply;
     @Column(name="payment_terms", length=200) String paymentTerms;
     @Column(name="delivery_terms", length=200) String deliveryTerms;
     @Column(name="delivery_date") LocalDate deliveryDate;
@@ -47,6 +52,8 @@ public class SalesOrder extends BaseDoc implements DocEntity {
     @Column(name="pending_qty") BigDecimal pendingQty;
 
     @Column(name="attachment_file_name", length=200) String attachmentFileName;
+    /** Set when this SO was created via Quotation "Convert to Sales Order" (Phase 3). */
+    @Column(name="quotation_ref", length=30) String quotationRef;
 
     @OneToMany(mappedBy="doc", cascade=CascadeType.ALL, orphanRemoval=true, fetch=FetchType.EAGER)
     List<SalesOrderItem> lines = new ArrayList<>();

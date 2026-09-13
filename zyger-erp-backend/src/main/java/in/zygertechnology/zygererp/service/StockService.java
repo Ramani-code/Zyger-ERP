@@ -385,7 +385,13 @@ public class StockService {
         if (existing.isPresent()) {
             StockBalance sb = existing.get();
             sb.setQty(sb.getQty().add(addQty).subtract(subtractQty));
-            if (sb.getQty().compareTo(BigDecimal.ZERO) <= 0 && "FREE".equals(stockStatus)) {
+            // A row that nets to zero (or, if some earlier bug ever let it happen,
+            // negative) is dead weight regardless of status: a lingering QC_HOLD/
+            // BLOCKED/etc. row at qty<=0 isn't just harmless clutter — a negative one
+            // would silently corrupt the on_hand-reserved-qc_hold "available" formula
+            // (BR-INV-ENGINE-2) for every other status bucket of this item/location.
+            // This used to only clean up FREE rows.
+            if (sb.getQty().compareTo(BigDecimal.ZERO) <= 0) {
                 balances.delete(sb);
             } else {
                 balances.save(sb);

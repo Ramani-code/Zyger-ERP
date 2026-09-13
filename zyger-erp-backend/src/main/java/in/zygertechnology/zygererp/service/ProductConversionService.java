@@ -35,6 +35,7 @@ public class ProductConversionService {
     private final WorkflowStateMachine stateMachine;
     private final InventoryIntegrationService inventory;
     private final ItemRepository items;
+    private final in.zygertechnology.zygererp.repo.ProductionPolicyRepository productionPolicies;
 
     // ─── Create / Update / Delete ─────────────────────────────────────────
 
@@ -138,6 +139,7 @@ public class ProductConversionService {
     private void post(ProductConversion pc, String user) {
         validateQuantityModel(pc);
         validateBatches(pc);
+        flagMaterialConsumptionVariance(pc);
         pc.setStatus("POSTED");
 
         String baseNo = pc.getConversionNumber();
@@ -154,6 +156,15 @@ public class ProductConversionService {
             inventory.receiveConversionOutput(
                     baseNo + "-IN", pc.getOutputItemCode(), dst, pc.getOutputBatchNumber(),
                     pc.getOutputQuantity(), tx, user);
+        }
+        // Production Module FRS §5.7 BR: chips/turnings by-product posts to a designated
+        // scrap item as ordinary FREE stock (see the scrapItemCode field note) — skipped
+        // entirely, as before, when no scrap item is configured on this conversion.
+        if (nz(pc.getScrapQty()).compareTo(BigDecimal.ZERO) > 0 && pc.getScrapItemCode() != null && !pc.getScrapItemCode().isBlank()) {
+            String scrapLoc = pc.getScrapLocation() != null && !pc.getScrapLocation().isBlank() ? pc.getScrapLocation() : dst;
+            inventory.receiveConversionOutput(
+                    baseNo + "-SCRAP", pc.getScrapItemCode(), scrapLoc, null,
+                    pc.getScrapQty(), tx, user);
         }
     }
 
@@ -206,9 +217,41 @@ public class ProductConversionService {
         }
     }
 
+    /**
+     * Production Module FRS §5.7 BR: flags (does not block) when actual raw-material
+     * consumption (inputQuantity) exceeds the theoretical consumption — output qty x the
+     * output item's Item Master standard weight — by more than the plant-wide
+     * materialConsumptionTolerancePercent. Silently no-ops if the output item has no
+     * recorded standard weight, since there is then nothing to compare against.
+     */
+    private void flagMaterialConsumptionVariance(ProductConversion pc) {
+        pc.setTheoreticalConsumptionQty(null);
+        pc.setMaterialVarianceFlagged(false);
+        if (pc.getOutputItemCode() == null) return;
+        ItemMaster outputItem = items.findByCode(pc.getOutputItemCode()).orElse(null);
+        if (outputItem == null || outputItem.getWeight() == null) return;
+
+        BigDecimal theoretical = nz(pc.getOutputQuantity()).multiply(outputItem.getWeight());
+        pc.setTheoreticalConsumptionQty(theoretical);
+        if (theoretical.compareTo(BigDecimal.ZERO) <= 0) return;
+
+        in.zygertechnology.zygererp.entity.ProductionPolicy policy =
+                productionPolicies.findFirstByActiveTrue().orElseGet(in.zygertechnology.zygererp.entity.ProductionPolicy::new);
+        BigDecimal tolerancePct = policy.getMaterialConsumptionTolerancePercent() != null
+                ? policy.getMaterialConsumptionTolerancePercent() : new BigDecimal("5.00");
+        BigDecimal maxAllowed = theoretical.add(theoretical.multiply(tolerancePct).divide(new BigDecimal("100")));
+
+        if (nz(pc.getInputQuantity()).compareTo(maxAllowed) > 0) {
+            pc.setMaterialVarianceFlagged(true);
+        }
+    }
+
     private boolean isControlled(String itemCode) {
         ItemMaster item = items.findByCode(itemCode)
                 .orElseThrow(() -> new IllegalArgumentException("Item '" + itemCode + "' does not exist in the item master"));
+        // `batchControl` and `requiresBatch` are independently meaningful (either one alone
+        // marks the item batch-controlled) — confirmed by ProductionBatchCardServiceTest's
+        // deliberate batchControl=true/requiresBatch=false case; not safe to collapse to one.
         return Boolean.TRUE.equals(item.getBatchControl())
                 || Boolean.TRUE.equals(item.getRequiresBatch());
     }

@@ -263,9 +263,10 @@ export default function DeliveryChallanForm({
       config,
       form,
       itemsMap,
-      validationMode === 'submit'
+      validationMode === 'submit',
+      availabilityMap
     );
-  }, [config, form, itemsMap, validationMode]);
+  }, [config, form, itemsMap, validationMode, availabilityMap]);
 
   useEffect(() => {
     if (validationErrors.length > 0 && validationBoxRef.current) {
@@ -463,7 +464,7 @@ export default function DeliveryChallanForm({
     if (!editable) return;
 
     setValidationMode(submit ? 'submit' : 'draft');
-    const errors = validateDeliveryChallanForm(config, form, itemsMap, submit);
+    const errors = validateDeliveryChallanForm(config, form, itemsMap, submit, availabilityMap);
 
     if (errors.length > 0) return;
 

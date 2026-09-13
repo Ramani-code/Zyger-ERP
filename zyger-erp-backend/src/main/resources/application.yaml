@@ -115,3 +115,11 @@ app:
     password-min-length: ${PASSWORD_MIN_LENGTH:8}
     max-login-attempts: ${MAX_LOGIN_ATTEMPTS:5}
     lockout-minutes: ${LOCKOUT_MINUTES:15}
+  sales:
+    # Phase 5 (BR-NEW-006/007): both default OFF — no GSP/IRP or E-Way Bill provider
+    # is configured yet (see in.zygertechnology.zygererp.integration.NotConfigured*).
+    # Flip to true only once a real provider is wired in; until then these gates
+    # must never block a normal Invoice/DC post.
+    einvoice-required: ${SALES_EINVOICE_REQUIRED:false}
+    eway-bill-required: ${SALES_EWAY_BILL_REQUIRED:false}
+    eway-bill-threshold: ${SALES_EWAY_BILL_THRESHOLD:50000}

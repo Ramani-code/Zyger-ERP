@@ -56,6 +56,12 @@ public class ProductionEntry {
     @Builder.Default
     private Boolean pendingSequenceOnly = true;
 
+    /** Production Module FRS §5.3 BR: a mandatory reason from a Production Supervisor/Plant
+     * Head lets an entry push cumulative Good+Rejected+Rework past the Job Card's planned
+     * quantity — otherwise that remains a hard block (see ProductionEntryValidationService). */
+    @Column(name = "override_reason", length = 250)
+    private String overrideReason;
+
     @Column(name = "part_code", length = 60)
     private String partCode;
 
@@ -100,6 +106,13 @@ public class ProductionEntry {
 
     @Column(name = "process_time", precision = 14, scale = 2)
     private BigDecimal processTime;
+
+    /** Production Module FRS §5.3 BR: true when processTime (Actual Run Time) exceeded the
+     * Route Sheet's standard cycle time by more than ProductionPolicy.cycleTimeTolerancePercent
+     * — a flag for supervisor review, not a block. Null/false when there's no route/operation
+     * to compare against. */
+    @Column(name = "cycle_time_variance_flagged")
+    private Boolean cycleTimeVarianceFlagged;
 
     @Column(name = "process_rate", precision = 14, scale = 2)
     private BigDecimal processRate;

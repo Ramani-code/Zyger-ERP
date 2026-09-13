@@ -57,6 +57,17 @@ export default function AttachmentsDrawer({ ownerType, ownerId, onClose }: Props
     load();
   }
 
+  async function handleDownload(id: number, fileName: string) {
+    try {
+      const r = await axiosClient.get(`/attachments/${id}/download`, { responseType: 'blob' });
+      const url = URL.createObjectURL(r.data as Blob);
+      window.open(url, '_blank', 'noopener,noreferrer');
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (err) {
+      console.error('Download failed', err);
+    }
+  }
+
   function formatSize(bytes: number) {
     if (bytes < 1024) return bytes + ' B';
     if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
@@ -102,6 +113,13 @@ export default function AttachmentsDrawer({ ownerType, ownerId, onClose }: Props
                 {a.uploadedBy && <span>by {a.uploadedBy}</span>}
               </div>
             </div>
+            <button
+              onClick={() => handleDownload(a.id, a.fileName)}
+              title="Download"
+              style={{ background: 'none', border: 'none', color: 'var(--blue)', cursor: 'pointer', fontSize: 14, padding: '4px 8px' }}
+            >
+              ⬇
+            </button>
             <button onClick={() => handleDelete(a.id)} style={{ background: 'none', border: 'none', color: 'var(--red)', cursor: 'pointer', fontSize: 14, padding: '4px 8px' }}>🗑</button>
           </div>
         ))}

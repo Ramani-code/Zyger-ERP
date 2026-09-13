@@ -24,6 +24,7 @@ import java.security.Principal;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -66,8 +67,57 @@ public class ProductionController {
     private final in.zygertechnology.zygererp.service.ProductionQualityGateService qualityGate;
     private final in.zygertechnology.zygererp.service.ProductionReturnService productionReturnService;
     private final in.zygertechnology.zygererp.service.ProductConversionService productConversionService;
+    private final ToolLifeEntryRepository toolLifeEntries;
+    private final ToolMasterRepository toolMasters;
+    private final ProductionPolicyRepository productionPolicies;
 
     private static String principalName(Principal p) { return p != null ? p.getName() : "system"; }
+
+    /**
+     * Production Module FRS §5.3 — Actual Run Time = End Time - Start Time - Idle Time
+     * logged in between. This field existed on ProductionEntry but nothing ever computed
+     * it (confirmed audit gap) — the frontend declared it but never set or displayed it.
+     * No-ops (leaves processTime as whatever was already there) when either timestamp is
+     * missing, since there's nothing to compute yet.
+     */
+    private void computeActualRunTime(ProductionEntry pe) {
+        if (pe.getStartTime() == null || pe.getEndTime() == null) return;
+        long elapsedSeconds = Duration.between(pe.getStartTime(), pe.getEndTime()).getSeconds();
+        BigDecimal elapsedMin = new BigDecimal(elapsedSeconds).divide(new BigDecimal(60), 2, RoundingMode.HALF_UP);
+        BigDecimal idleMin = pe.getIdleTime() != null ? pe.getIdleTime() : BigDecimal.ZERO;
+        BigDecimal actual = elapsedMin.subtract(idleMin);
+        pe.setProcessTime(actual.compareTo(BigDecimal.ZERO) < 0 ? BigDecimal.ZERO : actual);
+        flagCycleTimeVariance(pe);
+    }
+
+    /** Production Module FRS §5.3 BR: flags (does not block) when Actual Run Time exceeds the
+     * Route Sheet's standard time (setup + cycle x qty) by more than the plant-wide
+     * cycleTimeTolerancePercent. No-ops when the entry's route/operation can't be resolved. */
+    private void flagCycleTimeVariance(ProductionEntry pe) {
+        pe.setCycleTimeVarianceFlagged(false);
+        if (pe.getProcessTime() == null || pe.getRouteSheetNumber() == null || pe.getOperationCode() == null) return;
+        RouteSheet route = routeSheets.findAll().stream()
+                .filter(r -> pe.getRouteSheetNumber().equals(r.getRouteNumber()))
+                .findFirst().orElse(null);
+        if (route == null || route.getOperations() == null) return;
+        RouteOperation op = route.getOperations().stream()
+                .filter(o -> pe.getOperationCode().equalsIgnoreCase(o.getOperationCode()))
+                .findFirst().orElse(null);
+        if (op == null || op.getCycleTime() == null) return;
+
+        BigDecimal qty = (pe.getGoodQuantity() != null ? pe.getGoodQuantity() : BigDecimal.ZERO)
+                .add(pe.getReworkQuantity() != null ? pe.getReworkQuantity() : BigDecimal.ZERO);
+        BigDecimal standardMin = (op.getSetupTime() != null ? op.getSetupTime() : BigDecimal.ZERO)
+                .add(op.getCycleTime().multiply(qty));
+        if (standardMin.compareTo(BigDecimal.ZERO) <= 0) return;
+
+        ProductionPolicy policy = productionPolicies.findFirstByActiveTrue().orElseGet(ProductionPolicy::new);
+        BigDecimal tolerancePct = policy.getCycleTimeTolerancePercent() != null
+                ? policy.getCycleTimeTolerancePercent() : new BigDecimal("10.00");
+        BigDecimal maxAllowed = standardMin.add(standardMin.multiply(tolerancePct).divide(new BigDecimal("100")));
+
+        pe.setCycleTimeVarianceFlagged(pe.getProcessTime().compareTo(maxAllowed) > 0);
+    }
 
     private static <T> List<T> copyFresh(List<T> list) {
         return list == null ? null : new ArrayList<>(list);
@@ -185,6 +235,7 @@ public class ProductionController {
 
         pe.setProducedQuantity(processQty);
         pe.setProcessQty(processQty);
+        computeActualRunTime(pe);
 
         if (pe.getStatus() == null) pe.setStatus("DRAFT");
         if (pe.getQualityStatus() == null) pe.setQualityStatus("PENDING");
@@ -194,6 +245,7 @@ public class ProductionController {
         // Validate rules
         entryValidator.validate(pe);
         entryValidator.validateSequenceAndPending(pe);
+        entryValidator.validateMachineNotAlreadyRunning(pe);
 
         // Ensure proper JPA bi-directional linkages
         // NOTE: the child setters clear() the existing field list to re-add rebound
@@ -308,6 +360,7 @@ public class ProductionController {
         BigDecimal processQty = pe.getProcessQty() != null ? pe.getProcessQty() : (pe.getProducedQuantity() != null ? pe.getProducedQuantity() : BigDecimal.ZERO);
         pe.setProducedQuantity(processQty);
         pe.setProcessQty(processQty);
+        computeActualRunTime(pe);
 
         pe.setCreatedAt(e.getCreatedAt());
         pe.setCreatedBy(e.getCreatedBy());
@@ -316,6 +369,7 @@ public class ProductionController {
 
         entryValidator.validate(pe);
         entryValidator.validateSequenceAndPending(pe);
+        entryValidator.validateMachineNotAlreadyRunning(pe);
 
         pe.setOperators(copyFresh(pe.getOperators()));
         pe.setRejectionReasons(copyFresh(pe.getRejectionReasons()));
@@ -411,6 +465,7 @@ public class ProductionController {
                 // Atomic Final Posting (§4.3)
                 entryValidator.validate(pe);
                 entryValidator.validateSequenceAndPending(pe);
+                entryValidator.validateMachineNotAlreadyRunning(pe);
 
                 // P11 — Production Quality Gate (CLAR-PROD-012): refuse post while the operation's
                 // inspection is PENDING/FAIL/HELD without an approved one-time override.
@@ -692,6 +747,22 @@ public class ProductionController {
             mData.put("reworkQty", rework.add(pe.getReworkQuantity() != null ? pe.getReworkQuantity() : BigDecimal.ZERO));
             map.put(mCode, mData);
         }
+
+        // Machine Utilization % (Production Module FRS §6 — audit gap: this report only had
+        // raw quantity totals before, no utilization figure at all). Reuses oee_daily's
+        // already-computed Availability, now that it's fed from the correct production_entry
+        // table (see the earlier OEE fix) rather than recomputing hours from scratch here.
+        List<Object[]> utilRows = em.createNativeQuery(
+                "SELECT machine_code, AVG(availability) FROM oee_daily GROUP BY machine_code").getResultList();
+        for (Object[] row : utilRows) {
+            String mCode = (String) row[0];
+            Map<String, Object> mData = map.get(mCode);
+            if (mData == null) continue;
+            BigDecimal avgAvailability = row[1] != null ? new BigDecimal(row[1].toString()) : null;
+            mData.put("utilizationPercent", avgAvailability != null
+                    ? avgAvailability.multiply(new BigDecimal("100")).setScale(1, RoundingMode.HALF_UP) : null);
+        }
+
         list.addAll(map.values());
         return list;
     }
@@ -701,6 +772,18 @@ public class ProductionController {
         List<Map<String, Object>> list = new ArrayList<>();
         List<ProductionEntry> entries = productionEntries.findByStatus("POSTED");
         Map<String, Map<String, Object>> map = new LinkedHashMap<>();
+
+        // Route lookup for standard time — Operator Efficiency % (FRS §6 — audit gap: this
+        // report only had raw good/rejected totals before, no efficiency figure). Standard
+        // time per entry = setupTime + cycleTime x qty, from the RouteSheet operation the
+        // entry was logged against; entries with no resolvable route/operation are simply
+        // excluded from the efficiency ratio (their quantities still count above).
+        Map<String, RouteSheet> routesByNumber = routeSheets.findAll().stream()
+                .filter(r -> r.getRouteNumber() != null)
+                .collect(Collectors.toMap(RouteSheet::getRouteNumber, r -> r, (a, b) -> a));
+
+        Map<String, BigDecimal> standardMinutesByOperator = new LinkedHashMap<>();
+        Map<String, BigDecimal> actualMinutesByOperator = new LinkedHashMap<>();
 
         for (ProductionEntry pe : entries) {
             String opCode = pe.getOperatorCode() != null ? pe.getOperatorCode() : "UNASSIGNED";
@@ -713,8 +796,180 @@ public class ProductionController {
             opData.put("goodQty", good.add(pe.getGoodQuantity() != null ? pe.getGoodQuantity() : BigDecimal.ZERO));
             opData.put("rejectedQty", rejected.add(pe.getRejectedQuantity() != null ? pe.getRejectedQuantity() : BigDecimal.ZERO));
             map.put(opCode, opData);
+
+            if (pe.getRouteSheetNumber() == null || pe.getOperationCode() == null
+                    || pe.getStartTime() == null || pe.getEndTime() == null) {
+                continue;
+            }
+            RouteSheet route = routesByNumber.get(pe.getRouteSheetNumber());
+            if (route == null || route.getOperations() == null) continue;
+            RouteOperation op = route.getOperations().stream()
+                    .filter(o -> pe.getOperationCode().equalsIgnoreCase(o.getOperationCode()))
+                    .findFirst().orElse(null);
+            if (op == null || op.getCycleTime() == null) continue;
+
+            BigDecimal qty = (pe.getGoodQuantity() != null ? pe.getGoodQuantity() : BigDecimal.ZERO)
+                    .add(pe.getReworkQuantity() != null ? pe.getReworkQuantity() : BigDecimal.ZERO);
+            BigDecimal standardMin = (op.getSetupTime() != null ? op.getSetupTime() : BigDecimal.ZERO)
+                    .add(op.getCycleTime().multiply(qty));
+
+            long actualSeconds = java.time.Duration.between(pe.getStartTime(), pe.getEndTime()).getSeconds()
+                    - (pe.getIdleTime() != null ? pe.getIdleTime().multiply(new BigDecimal(60)).longValue() : 0L);
+            if (actualSeconds <= 0) continue;
+            BigDecimal actualMin = new BigDecimal(actualSeconds).divide(new BigDecimal(60), 4, RoundingMode.HALF_UP);
+
+            standardMinutesByOperator.merge(opCode, standardMin, BigDecimal::add);
+            actualMinutesByOperator.merge(opCode, actualMin, BigDecimal::add);
         }
+
+        for (Map.Entry<String, Map<String, Object>> e : map.entrySet()) {
+            BigDecimal std = standardMinutesByOperator.get(e.getKey());
+            BigDecimal act = actualMinutesByOperator.get(e.getKey());
+            if (std != null && act != null && act.compareTo(BigDecimal.ZERO) > 0) {
+                e.getValue().put("efficiencyPercent", std.multiply(new BigDecimal("100"))
+                        .divide(act, 1, RoundingMode.HALF_UP));
+            } else {
+                e.getValue().put("efficiencyPercent", null);
+            }
+        }
+
         list.addAll(map.values());
+        return list;
+    }
+
+    @GetMapping("/api/v1/production/reports/daily-production-summary")
+    public List<Map<String, Object>> getDailyProductionReport() {
+        List<ProductionEntry> entries = productionEntries.findByStatus("POSTED");
+        Map<LocalDate, Map<String, Object>> byDate = new TreeMap<>(Comparator.reverseOrder());
+
+        for (ProductionEntry pe : entries) {
+            LocalDate d = pe.getProductionDate() != null
+                    ? pe.getProductionDate().atZone(ZoneId.systemDefault()).toLocalDate() : LocalDate.now();
+            Map<String, Object> row = byDate.getOrDefault(d, new LinkedHashMap<>());
+            row.put("date", d.toString());
+            row.put("goodQty", ((BigDecimal) row.getOrDefault("goodQty", BigDecimal.ZERO))
+                    .add(pe.getGoodQuantity() != null ? pe.getGoodQuantity() : BigDecimal.ZERO));
+            row.put("rejectedQty", ((BigDecimal) row.getOrDefault("rejectedQty", BigDecimal.ZERO))
+                    .add(pe.getRejectedQuantity() != null ? pe.getRejectedQuantity() : BigDecimal.ZERO));
+            row.put("reworkQty", ((BigDecimal) row.getOrDefault("reworkQty", BigDecimal.ZERO))
+                    .add(pe.getReworkQuantity() != null ? pe.getReworkQuantity() : BigDecimal.ZERO));
+            row.put("scrapQty", ((BigDecimal) row.getOrDefault("scrapQty", BigDecimal.ZERO))
+                    .add(pe.getScrapQuantity() != null ? pe.getScrapQuantity() : BigDecimal.ZERO));
+            row.put("entries", ((Integer) row.getOrDefault("entries", 0)) + 1);
+            byDate.put(d, row);
+        }
+        return new ArrayList<>(byDate.values());
+    }
+
+    @GetMapping("/api/v1/production/reports/shift-summary")
+    public List<Map<String, Object>> getShiftSummary() {
+        List<ProductionEntry> entries = productionEntries.findByStatus("POSTED");
+        Map<String, Map<String, Object>> map = new LinkedHashMap<>();
+
+        for (ProductionEntry pe : entries) {
+            String shift = pe.getShiftCode() != null && !pe.getShiftCode().isBlank() ? pe.getShiftCode() : "UNSPECIFIED";
+            Map<String, Object> row = map.getOrDefault(shift, new LinkedHashMap<>());
+            row.put("shiftCode", shift);
+            BigDecimal good = (BigDecimal) row.getOrDefault("goodQty", BigDecimal.ZERO);
+            BigDecimal rejected = (BigDecimal) row.getOrDefault("rejectedQty", BigDecimal.ZERO);
+            row.put("goodQty", good.add(pe.getGoodQuantity() != null ? pe.getGoodQuantity() : BigDecimal.ZERO));
+            row.put("rejectedQty", rejected.add(pe.getRejectedQuantity() != null ? pe.getRejectedQuantity() : BigDecimal.ZERO));
+            BigDecimal totalForPct = ((BigDecimal) row.get("goodQty")).add((BigDecimal) row.get("rejectedQty"));
+            row.put("rejectionPercent", totalForPct.compareTo(BigDecimal.ZERO) > 0
+                    ? ((BigDecimal) row.get("rejectedQty")).multiply(new BigDecimal("100"))
+                            .divide(totalForPct, 1, RoundingMode.HALF_UP)
+                    : BigDecimal.ZERO);
+            Set<String> operators = (Set<String>) row.computeIfAbsent("_operators", k -> new LinkedHashSet<String>());
+            if (pe.getOperatorCode() != null) operators.add(pe.getOperatorCode());
+            row.put("operatorsDeployed", operators.size());
+            map.put(shift, row);
+        }
+        map.values().forEach(row -> row.remove("_operators"));
+        return new ArrayList<>(map.values());
+    }
+
+    @GetMapping("/api/v1/production/reports/wip-summary")
+    public List<Map<String, Object>> getWipReport() {
+        List<Map<String, Object>> list = new ArrayList<>();
+        List<JobCard> openCards = jobCards.findAll().stream()
+                .filter(jc -> !Set.of("COMPLETED", "CANCELLED", "CLOSED").contains(jc.getStatus()))
+                .collect(Collectors.toList());
+
+        for (JobCard jc : openCards) {
+            List<JobCardSubjob> subs = jobCardSubjobs.findByJobCardId(jc.getId());
+            for (JobCardSubjob sub : subs) {
+                if ("CANCELLED".equalsIgnoreCase(sub.getStatus()) || "COMPLETED".equalsIgnoreCase(sub.getStatus())) continue;
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("jobCardNumber", jc.getJobCardNumber());
+                row.put("workOrderNumber", jc.getWorkOrderNumber());
+                row.put("partCode", jc.getPartCode());
+                row.put("operationCode", sub.getOperationCode());
+                row.put("sequenceNo", sub.getSequenceNo());
+                row.put("plannedQty", sub.getPlannedQuantity());
+                row.put("completedQty", sub.getCompletedQuantity());
+                BigDecimal planned = sub.getPlannedQuantity() != null ? sub.getPlannedQuantity() : BigDecimal.ZERO;
+                BigDecimal completed = sub.getCompletedQuantity() != null ? sub.getCompletedQuantity() : BigDecimal.ZERO;
+                row.put("pendingQty", planned.subtract(completed).max(BigDecimal.ZERO));
+                row.put("status", sub.getStatus());
+                long ageingDays = jc.getCreatedAt() != null
+                        ? ChronoUnit.DAYS.between(jc.getCreatedAt().atZone(ZoneId.systemDefault()).toLocalDate(), LocalDate.now())
+                        : 0;
+                row.put("ageingDays", ageingDays);
+                list.add(row);
+            }
+        }
+        list.sort((a, b) -> Long.compare((Long) b.get("ageingDays"), (Long) a.get("ageingDays")));
+        return list;
+    }
+
+    @GetMapping("/api/v1/production/reports/tool-consumption-summary")
+    public List<Map<String, Object>> getToolConsumptionReport() {
+        List<Map<String, Object>> list = new ArrayList<>();
+        for (ToolMaster tool : toolMasters.findAll()) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("toolCode", tool.getCode());
+            row.put("toolName", tool.getName());
+            row.put("ratedLife", tool.getToolLifeCount());
+            row.put("lifeUnit", tool.getToolLifeUnit());
+            row.put("currentUsage", tool.getCurrentUsage());
+            BigDecimal remainingPct = null;
+            if (tool.getToolLifeCount() != null && tool.getToolLifeCount().compareTo(BigDecimal.ZERO) > 0) {
+                BigDecimal usage = tool.getCurrentUsage() != null ? tool.getCurrentUsage() : BigDecimal.ZERO;
+                remainingPct = tool.getToolLifeCount().subtract(usage).multiply(new BigDecimal("100"))
+                        .divide(tool.getToolLifeCount(), 1, RoundingMode.HALF_UP);
+                if (remainingPct.compareTo(BigDecimal.ZERO) < 0) remainingPct = BigDecimal.ZERO;
+            }
+            row.put("remainingLifePercent", remainingPct);
+            row.put("changeCount", toolLifeEntries.findByToolCodeOrderByCreatedAtDesc(tool.getCode()).stream()
+                    .filter(e -> e.getChangeReason() != null).count());
+            list.add(row);
+        }
+        return list;
+    }
+
+    @GetMapping("/api/v1/production/reports/order-status-summary")
+    public List<Map<String, Object>> getOrderStatusReport() {
+        List<Map<String, Object>> list = new ArrayList<>();
+        for (WorkOrder wo : workOrders.findAll()) {
+            if (Set.of("DRAFT", "CANCELLED").contains(wo.getStatus())) continue;
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("workOrderNumber", wo.getDocNo() != null ? wo.getDocNo() : wo.getWoNumber());
+            row.put("customerCode", wo.getCustomerCode());
+            row.put("itemCode", wo.getItemCode());
+            row.put("orderQuantity", wo.getOrderQuantity());
+            row.put("completedQty", wo.getCompletedQty());
+            row.put("status", wo.getStatus());
+            row.put("plannedCompletionDate", wo.getDueDate());
+            row.put("actualCompletionDate", wo.getActualEndDate());
+            // Delayed if it finished after its due date, or (still open) is already past due.
+            LocalDate comparisonDate = wo.getActualEndDate() != null ? wo.getActualEndDate() : LocalDate.now();
+            boolean delayed = wo.getDueDate() != null && comparisonDate.isAfter(wo.getDueDate());
+            row.put("delayed", delayed);
+            row.put("delayDays", wo.getDueDate() != null
+                    ? ChronoUnit.DAYS.between(wo.getDueDate(), wo.getActualEndDate() != null ? wo.getActualEndDate() : LocalDate.now())
+                    : null);
+            list.add(row);
+        }
         return list;
     }
 

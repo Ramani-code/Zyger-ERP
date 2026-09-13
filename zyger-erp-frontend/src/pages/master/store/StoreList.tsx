@@ -41,8 +41,8 @@ export default function StoreList({ onAdd, onEdit, onView }: Props) {
     if (!deleteTarget) return;
     setBusy(true);
     try {
-      await apiClient.delete(`/master/stores/${deleteTarget.id}`);
-      toast('Store deleted.');
+      const { data } = await apiClient.delete(`/master/stores/${deleteTarget.id}`);
+      toast(data?.deactivated ? (data.message || 'Store is in use; it was deactivated.') : 'Store deleted.', data?.deactivated ? 'success' : undefined);
       setDeleteTarget(null); load();
     } catch (e) { toast(getApiErrorMessage(e, 'Delete failed.'), 'error'); }
     setBusy(false);

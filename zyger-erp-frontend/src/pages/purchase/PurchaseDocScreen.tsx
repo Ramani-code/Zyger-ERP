@@ -1400,8 +1400,16 @@ export default function PurchaseDocScreen({ config, initialDocId, viewOnly = fal
     const mutation = mutationForSend();
     if (!mutation) return;
     try {
-      const res = await mutation.mutateAsync(documentId);
-      toast((res as any)?.message || 'Mail sent successfully!', 'success');
+      const res = await mutation.mutateAsync(documentId) as { sent?: boolean; message?: string } | undefined;
+      // The backend returns HTTP 200 even when the email itself failed to send
+      // (sent: false, with the real reason in message) — check the payload, not
+      // just whether the request succeeded, or a failed send gets reported as a
+      // green success toast and the form gets marked SENT anyway.
+      if (res?.sent === false) {
+        toast(res.message || 'Failed to send email', 'error');
+        return;
+      }
+      toast(res?.message || 'Mail sent successfully!', 'success');
       setForm(prev => ({ ...prev, status: 'SENT', emailStatus: 'SENT', emailSent: true }));
     } catch (err: any) {
       toast(getApiErrorMessage(err, 'Failed to send email'), 'error');

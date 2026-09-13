@@ -228,11 +228,6 @@ public class PurchaseService {
                     recordJobWorkPriceHistory(jwpl, user);
                 }
             }
-            case "po-inward" -> {
-                if (e instanceof PoInward pi) {
-                    autoCreateIqcFromInward(pi, user);
-                }
-            }
             default -> {}
         }
     }
@@ -278,18 +273,23 @@ public class PurchaseService {
         if (to == null || to.isBlank()) return null;
         String targetName = s != null ? s.getSupplierName() : se.getSupplier();
         boolean ok;
+        String failureReason = null;
         try {
             ok = emailService.sendSupplierEnquiryEmail(se, to, null, targetName);
+            if (!ok) failureReason = "SMTP delivery failed";
         } catch (Exception ex) {
             ok = false;
+            failureReason = ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName();
         }
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("email", to);
         out.put("name", targetName);
         out.put("sent", ok);
+        if (!ok) out.put("error", failureReason);
         if (s != null) {
             s.setEmailStatus(ok ? "SENT" : "FAILED");
             if (ok) s.setEmailSentAt(Instant.now());
+            else s.setEmailError(failureReason);
         }
         return out;
     }
@@ -311,15 +311,18 @@ public class PurchaseService {
             throw new IllegalStateException("Failed to generate PO PDF for email: " + ex.getMessage(), ex);
         }
         boolean ok;
+        String failureReason = null;
         try {
             ok = emailService.sendPurchaseOrderEmail(po, po.getEmail(), null, pdf,
                     po.getDocNo().replaceAll("[^A-Za-z0-9_-]", "_") + ".pdf");
+            if (!ok) failureReason = "SMTP delivery failed";
         } catch (Exception ex) {
             ok = false;
+            failureReason = ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName();
         }
         po.setEmailStatus(ok ? "SENT" : "FAILED");
         if (ok) po.setEmailSentAt(Instant.now());
-        else po.setEmailError("SMTP delivery failed (logged to dry-run)");
+        else po.setEmailError(failureReason);
         if (ok) po.setStatus("SENT");
         em.merge(po);
         em.flush();
@@ -352,15 +355,18 @@ public class PurchaseService {
             throw new IllegalStateException("Failed to generate JO PDF for email: " + ex.getMessage(), ex);
         }
         boolean ok;
+        String failureReason = null;
         try {
             ok = emailService.sendJobOrderEmail(jo, jo.getEmail(), null, pdf,
                     jo.getDocNo().replaceAll("[^A-Za-z0-9_-]", "_") + ".pdf");
+            if (!ok) failureReason = "SMTP delivery failed";
         } catch (Exception ex) {
             ok = false;
+            failureReason = ex.getMessage() != null ? ex.getMessage() : ex.getClass().getSimpleName();
         }
         jo.setEmailStatus(ok ? "SENT" : "FAILED");
         if (ok) jo.setEmailSentAt(Instant.now());
-        else jo.setEmailError("SMTP delivery failed (logged to dry-run)");
+        else jo.setEmailError(failureReason);
         notifications.notify(ok ? "DOC_SENT" : "DOC_SEND_FAILED", "PURCHASE", "job-order", jo.getId(),
                 ok ? "INFO" : "WARNING",
                 (ok ? "Job Order " : "Failed to email Job Order ") + jo.getDocNo() + " to " + jo.getEmail(), jo.getDocNo());
@@ -635,43 +641,10 @@ public class PurchaseService {
         } catch (Exception e) { return null; }
     }
 
-    private void autoCreateIqcFromInward(PoInward pi, String user) {
-        if ("NO".equalsIgnoreCase(pi.getQcRequired())) return;
-        if (pi.getLines() == null || pi.getLines().isEmpty()) return;
-        // DocumentFacade.createQualityInspectionIfRequired() already auto-creates one inspection per
-        // line at PO Inward creation time when qcRequired=Yes. This approve-time path only exists for
-        // callers that skip straight to approve; if inspections for this source already exist, don't
-        // create a second set (approving a doc whose inspections were already created must be a no-op).
-        try {
-            Long already = em.createQuery(
-                    "select count(q) from QualityInspection q where q.sourceNumber = :sn", Long.class)
-                    .setParameter("sn", pi.getDocNo())
-                    .getSingleResult();
-            if (already != null && already > 0) return;
-        } catch (Exception ignored) {}
-        try {
-            for (PoInwardLine line : pi.getLines()) {
-                if (line.getItemCode() == null || line.getItemCode().isBlank()) continue;
-                if (line.getReceivedQty() == null || line.getReceivedQty().signum() <= 0) continue;
-                Map<String, Object> body = new LinkedHashMap<>();
-                body.put("inspectionType", "IQC");
-                body.put("sourceType", "PO_INWARD");
-                body.put("sourceId", String.valueOf(pi.getId()));
-                body.put("sourceNumber", pi.getDocNo());
-                body.put("purchaseOrderNumber", pi.getPurchaseOrderNo());
-                body.put("poInwardNumber", pi.getDocNo());
-                body.put("itemCode", line.getItemCode());
-                body.put("itemDescription", line.getItemCode());
-                body.put("receivedQuantity", line.getReceivedQty());
-                body.put("inspectionQuantity", line.getReceivedQty());
-                body.put("inspectionDate", LocalDate.now().toString());
-                body.put("priority", "Normal");
-                body.put("inspector", pi.getReceivedBy());
-                qualityInspectionService.create(body, user);
-            }
-        } catch (Exception ex) {
-            org.slf4j.LoggerFactory.getLogger(PurchaseService.class)
-                .warn("Auto-create IQC from PO inward {} failed: {}", pi.getDocNo(), ex.getMessage());
-        }
-    }
+    // Purchase Module audit: an "autoCreateIqcFromInward(PoInward, String)" fallback used to live
+    // here, wired to a "po-inward" case in postActionHook's approve switch above. It was dead code
+    // — "po-inward" was never added to PurchaseController.ALLOWED, so that switch case could never
+    // actually run through the API. The real, active IQC-auto-creation mechanism is
+    // DocumentFacade.createQualityInspectionIfRequired(), which fires at po-inward create time
+    // (not approve) and is independent of this service. Removed rather than left as dead code.
 }

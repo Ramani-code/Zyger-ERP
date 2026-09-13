@@ -32,8 +32,8 @@ export const salesApi = {
     return response.data;
   },
 
-  async docAction(docType: string, id: number | string, action: string, note?: string): Promise<Record<string, unknown>> {
-    const response = await apiClient.post<Record<string, unknown>>(`/v1/sales/${docType}/${id}/actions/${action}`, { note: note ?? '' });
+  async docAction(docType: string, id: number | string, action: string, note?: string, options?: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const response = await apiClient.post<Record<string, unknown>>(`/v1/sales/${docType}/${id}/actions/${action}`, { note: note ?? '', options });
     return response.data;
   },
 

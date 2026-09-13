@@ -83,20 +83,31 @@ public class DocumentWorkflowEngine {
         eightD.put("CLOSED",            Set.of());
         TRANSITIONS.put("QUALITY_8D", eightD);
 
-        // Breakdown Intimation: DRAFT → OPEN → IN_PROGRESS → CLOSED
+        // Breakdown Intimation: OPEN → ASSIGNED → DIAGNOSED → CLOSED, CANCELLED from any
+        // non-terminal state. [CORRECTED — Maintenance Module audit] the old vocabulary here
+        // (DRAFT/OPEN/IN_PROGRESS/CLOSED) never matched what MaintenanceService.breakdownAction
+        // actually writes, so the _allowedTransitions metadata sent to the frontend was
+        // meaningless; validate() is not called against this map (breakdownAction enforces its
+        // own rules — BR-03 — directly), so this fixes only that displayed metadata, not
+        // enforcement.
         Map<String, Set<String>> bi = new HashMap<>();
-        bi.put("DRAFT",        Set.of("OPEN"));
-        bi.put("OPEN",         Set.of("IN_PROGRESS"));
-        bi.put("IN_PROGRESS",  Set.of("CLOSED"));
-        bi.put("CLOSED",       Set.of());
+        bi.put("OPEN",       Set.of("ASSIGNED", "CANCELLED"));
+        bi.put("ASSIGNED",   Set.of("DIAGNOSED", "CANCELLED"));
+        bi.put("DIAGNOSED",  Set.of("CLOSED", "CANCELLED"));
+        bi.put("CLOSED",     Set.of());
+        bi.put("CANCELLED",  Set.of());
         TRANSITIONS.put("BREAKDOWN_INTIMATION", bi);
 
-        // PM Schedule: PLANNED → DUE → DONE → OVERDUE
+        // PM Schedule: UPCOMING → IN_PROGRESS → COMPLETED, with SKIPPED and OVERDUE side
+        // paths. [CORRECTED — Maintenance Module audit] same situation as above: the old
+        // PLANNED/DUE/DONE/OVERDUE vocabulary never matched MaintenanceService.pmScheduleAction
+        // or the daily OVERDUE status-recalc job; validate() is not called against this map.
         Map<String, Set<String>> pms = new HashMap<>();
-        pms.put("PLANNED", Set.of("DUE"));
-        pms.put("DUE",     Set.of("DONE", "OVERDUE"));
-        pms.put("OVERDUE", Set.of("DONE"));
-        pms.put("DONE",    Set.of());
+        pms.put("UPCOMING",    Set.of("IN_PROGRESS", "SKIPPED", "OVERDUE"));
+        pms.put("OVERDUE",     Set.of("IN_PROGRESS", "COMPLETED"));
+        pms.put("IN_PROGRESS", Set.of("COMPLETED"));
+        pms.put("COMPLETED",   Set.of());
+        pms.put("SKIPPED",     Set.of());
         TRANSITIONS.put("PM_SCHEDULE", pms);
     }
 

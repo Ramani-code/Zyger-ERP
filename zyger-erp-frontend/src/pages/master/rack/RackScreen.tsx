@@ -59,7 +59,11 @@ export default function RackScreen() {
   const del = async () => {
     if (!deleteTarget) return;
     setBusy(true);
-    try { await apiClient.delete(`/master/racks/${deleteTarget.id}`); toast('Rack deleted.'); setDeleteTarget(null); load(); }
+    try {
+      const { data } = await apiClient.delete(`/master/racks/${deleteTarget.id}`);
+      toast(data?.deactivated ? (data.message || 'Rack is in use; it was deactivated.') : 'Rack deleted.', data?.deactivated ? 'success' : undefined);
+      setDeleteTarget(null); load();
+    }
     catch (e) { toast(getApiErrorMessage(e, 'Delete failed.'), 'error'); }
     setBusy(false);
   };

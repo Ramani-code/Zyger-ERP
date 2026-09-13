@@ -48,6 +48,8 @@ public class PurchaseController {
     private final PrintService printer;
     private final JobOrderReconciliationService joReconciliation;
     private final in.zygertechnology.zygererp.repo.PoAmendmentHistoryRepository poAmendments;
+    private final in.zygertechnology.zygererp.repo.PurchaseOrderScheduleRepository poSchedules;
+    private final in.zygertechnology.zygererp.repo.JobOrderScheduleRepository joSchedules;
 
     private static String key(String type) {
         if (!ALLOWED.contains(type)) {
@@ -94,6 +96,85 @@ public class PurchaseController {
     @GetMapping("/purchase-order/{id}/amendments")
     List<in.zygertechnology.zygererp.entity.PoAmendmentHistory> poAmendmentHistory(@PathVariable Long id) {
         return poAmendments.findByPoIdOrderByRevisionNumberDesc(id);
+    }
+
+    // Purchase Module audit: PoSchedulePage/JoSchedulePage previously only held created
+    // schedules in local React state — nothing was ever persisted, so they vanished on
+    // refresh. These endpoints are the missing backend half.
+
+    @Operation(summary = "List a Purchase Order's delivery schedule rows")
+    @GetMapping("/purchase-order/{id}/schedules")
+    List<in.zygertechnology.zygererp.entity.PurchaseOrderSchedule> listPoSchedules(@PathVariable Long id) {
+        return poSchedules.findByDocId(id);
+    }
+
+    @Operation(summary = "Add a delivery schedule row to a Purchase Order")
+    @PostMapping("/purchase-order/{id}/schedules")
+    in.zygertechnology.zygererp.entity.PurchaseOrderSchedule createPoSchedule(
+            @PathVariable Long id, @RequestBody in.zygertechnology.zygererp.entity.PurchaseOrderSchedule body) {
+        var po = (in.zygertechnology.zygererp.entity.PurchaseOrder) svc.get("purchase-order", id);
+        body.setId(null);
+        body.setDoc(po);
+        if (body.getSupplier() == null || body.getSupplier().isBlank()) body.setSupplier(po.getSupplier());
+        if (body.getPendingQty() == null) body.setPendingQty(body.getScheduledQty());
+        if (body.getReceivedQty() == null) body.setReceivedQty(java.math.BigDecimal.ZERO);
+        if (body.getStatus() == null || body.getStatus().isBlank()) body.setStatus("PLANNED");
+        return poSchedules.save(body);
+    }
+
+    @Operation(summary = "Update a Purchase Order delivery schedule row")
+    @PutMapping("/purchase-order/{id}/schedules/{scheduleId}")
+    in.zygertechnology.zygererp.entity.PurchaseOrderSchedule updatePoSchedule(
+            @PathVariable Long id, @PathVariable Long scheduleId,
+            @RequestBody in.zygertechnology.zygererp.entity.PurchaseOrderSchedule body) {
+        var existing = poSchedules.findById(scheduleId)
+                .orElseThrow(() -> new IllegalArgumentException("Schedule row not found: " + scheduleId));
+        body.setId(scheduleId);
+        body.setDoc(existing.getDoc());
+        return poSchedules.save(body);
+    }
+
+    @Operation(summary = "Delete a Purchase Order delivery schedule row")
+    @DeleteMapping("/purchase-order/{id}/schedules/{scheduleId}")
+    void deletePoSchedule(@PathVariable Long id, @PathVariable Long scheduleId) {
+        poSchedules.deleteById(scheduleId);
+    }
+
+    @Operation(summary = "List a Job Order's delivery schedule rows")
+    @GetMapping("/job-order/{id}/schedules")
+    List<in.zygertechnology.zygererp.entity.JobOrderSchedule> listJoSchedules(@PathVariable Long id) {
+        return joSchedules.findByDocId(id);
+    }
+
+    @Operation(summary = "Add a delivery schedule row to a Job Order")
+    @PostMapping("/job-order/{id}/schedules")
+    in.zygertechnology.zygererp.entity.JobOrderSchedule createJoSchedule(
+            @PathVariable Long id, @RequestBody in.zygertechnology.zygererp.entity.JobOrderSchedule body) {
+        var jo = (in.zygertechnology.zygererp.entity.JobOrder) svc.get("job-order", id);
+        body.setId(null);
+        body.setDoc(jo);
+        if (body.getPendingQty() == null) body.setPendingQty(body.getScheduledQty());
+        if (body.getReceivedQty() == null) body.setReceivedQty(java.math.BigDecimal.ZERO);
+        if (body.getStatus() == null || body.getStatus().isBlank()) body.setStatus("PLANNED");
+        return joSchedules.save(body);
+    }
+
+    @Operation(summary = "Update a Job Order delivery schedule row")
+    @PutMapping("/job-order/{id}/schedules/{scheduleId}")
+    in.zygertechnology.zygererp.entity.JobOrderSchedule updateJoSchedule(
+            @PathVariable Long id, @PathVariable Long scheduleId,
+            @RequestBody in.zygertechnology.zygererp.entity.JobOrderSchedule body) {
+        var existing = joSchedules.findById(scheduleId)
+                .orElseThrow(() -> new IllegalArgumentException("Schedule row not found: " + scheduleId));
+        body.setId(scheduleId);
+        body.setDoc(existing.getDoc());
+        return joSchedules.save(body);
+    }
+
+    @Operation(summary = "Delete a Job Order delivery schedule row")
+    @DeleteMapping("/job-order/{id}/schedules/{scheduleId}")
+    void deleteJoSchedule(@PathVariable Long id, @PathVariable Long scheduleId) {
+        joSchedules.deleteById(scheduleId);
     }
 
     @Operation(summary = "Update a purchase document (DRAFT/REJECTED only)")

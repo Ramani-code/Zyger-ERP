@@ -2,7 +2,10 @@ package in.zygertechnology.zygererp.controller;
 
 import in.zygertechnology.zygererp.entity.Attachment;
 import in.zygertechnology.zygererp.service.AttachmentService;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -45,10 +48,19 @@ public class AttachmentController {
     }
 
     @GetMapping("/{id}/download")
-    public byte[] download(@PathVariable Long id) throws IOException {
-        // We'd normally stream this, but for simplicity return the file bytes
-        Attachment att = svc.list("UNUSED", 0L).stream().filter(a -> a.getId().equals(id)).findFirst()
-                .orElseThrow(() -> new IllegalArgumentException("Attachment not found"));
-        return Files.readAllBytes(Path.of(att.getStoragePath()));
+    public ResponseEntity<byte[]> download(@PathVariable Long id) throws IOException {
+        Attachment att = svc.getById(id);
+        byte[] bytes = Files.readAllBytes(Path.of(att.getStoragePath()));
+        MediaType type;
+        try {
+            type = att.getContentType() != null ? MediaType.parseMediaType(att.getContentType()) : MediaType.APPLICATION_OCTET_STREAM;
+        } catch (Exception ex) {
+            type = MediaType.APPLICATION_OCTET_STREAM;
+        }
+        return ResponseEntity.ok()
+                .contentType(type)
+                .header(HttpHeaders.CONTENT_DISPOSITION,
+                        ContentDisposition.inline().filename(att.getFileName() != null ? att.getFileName() : "file").build().toString())
+                .body(bytes);
     }
 }

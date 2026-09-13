@@ -30,7 +30,9 @@ public class SalesController {
 
     private static final Set<String> ALLOWED = Set.of(
             "sales-order", "proforma-invoice", "sales-dc",
-            "sales-invoice", "dc-return", "invoice-return"
+            "sales-invoice", "dc-return", "invoice-return",
+            "payment-receipt", "credit-debit-note",
+            "enquiry", "quotation"
     );
 
     private final DocumentFacade svc;
@@ -79,7 +81,7 @@ public class SalesController {
             @Parameter(description = "Document ID") @PathVariable Long id,
             @RequestBody Map<String, Object> b,
             Principal p) {
-        return svc.toRow(svc.update(key(type), id, b, principalName(p)));
+        return svc.toRow(sales.update(key(type), id, b, principalName(p)));
     }
 
     @Operation(summary = "Delete a sales document (DRAFT/REJECTED only)")
@@ -113,6 +115,33 @@ public class SalesController {
         }
         String note = String.valueOf(opts.getOrDefault("note", ""));
         return svc.toRow(sales.action(key(type), id, action, note, principalName(p), opts));
+    }
+
+    @Operation(summary = "Preview the impact of amending a Sales Order (BR-NEW-009) before committing it")
+    @GetMapping("/sales-order/{id}/amend-impact")
+    Map<String, Object> amendImpact(@Parameter(description = "Sales Order ID") @PathVariable Long id) {
+        return sales.amendImpact(id);
+    }
+
+    @Operation(summary = "Generate an E-Invoice IRN for a Sales Invoice via the configured GSP/IRP provider")
+    @PostMapping("/sales-invoice/{id}/e-invoice/generate")
+    Map<String, Object> generateEInvoice(@Parameter(description = "Sales Invoice ID") @PathVariable Long id, Principal p) {
+        return svc.toRow(sales.generateEInvoice(id, principalName(p)));
+    }
+
+    @Operation(summary = "Generate an E-Way Bill for a Sales DC via the configured E-Way Bill provider")
+    @PostMapping("/sales-dc/{id}/eway-bill/generate")
+    Map<String, Object> generateEWayBill(@Parameter(description = "Sales DC ID") @PathVariable Long id, Principal p) {
+        return svc.toRow(sales.generateEWayBill(id, principalName(p)));
+    }
+
+    @Operation(summary = "Update the E-Way Bill Part-B (en-route vehicle change) for a Sales DC")
+    @PostMapping("/sales-dc/{id}/eway-bill/update-part-b")
+    Map<String, Object> updateEWayBillPartB(
+            @Parameter(description = "Sales DC ID") @PathVariable Long id,
+            @RequestBody Map<String, String> body,
+            Principal p) {
+        return svc.toRow(sales.updateEWayBillPartB(id, body.get("vehicleNo"), principalName(p)));
     }
 
     @Operation(summary = "Export sales documents to Excel or PDF")
@@ -156,5 +185,29 @@ public class SalesController {
     @GetMapping("/dashboard")
     Map<String, Object> dashboard() {
         return sales.dashboard();
+    }
+
+    @Operation(summary = "Invoice ageing report (0-30/31-45/46-60/60+ buckets)")
+    @GetMapping("/reports/ageing")
+    Map<String, Object> ageingReport() {
+        return sales.ageingReport();
+    }
+
+    @Operation(summary = "Quotation win/loss ratio and average margin won")
+    @GetMapping("/reports/win-loss")
+    Map<String, Object> winLossReport() {
+        return sales.winLossReport();
+    }
+
+    @Operation(summary = "On-time-delivery performance report")
+    @GetMapping("/reports/otd")
+    Map<String, Object> otdReport() {
+        return sales.otdReport();
+    }
+
+    @Operation(summary = "GSTR-1 outward-supply-ready extract for a period")
+    @GetMapping("/reports/gstr1-extract")
+    Map<String, Object> gstr1Extract(@RequestParam String period) {
+        return sales.gstr1Extract(period);
     }
 }

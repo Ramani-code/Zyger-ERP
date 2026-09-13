@@ -121,8 +121,11 @@ export const NAV_ITEMS: NavTopItem[] = [
         children: [
           { type: 'heading', id: 'master-assets-heading', label: 'ASSETS', icon: 'precision_manufacturing' },
           { type: 'item', id: 'machine-master', label: 'Machine Master', icon: 'precision_manufacturing', screenId: 'machine-master', tabIcon: 'precision_manufacturing' },
+          { type: 'item', id: 'machine-capability', label: 'Machine Capability Matrix', icon: 'rule', screenId: 'machine-capability', tabIcon: 'rule' },
           { type: 'item', id: 'instrument-master', label: 'Instrument Master', icon: 'science', screenId: 'instrument-master', tabIcon: 'science' },
           { type: 'item', id: 'tool-master', label: 'Tools Master', icon: 'build', screenId: 'tool-master', tabIcon: 'build' },
+          { type: 'item', id: 'operator-master', label: 'Operator Master', icon: 'engineering', screenId: 'operator-master', tabIcon: 'engineering' },
+          { type: 'item', id: 'drawing-revision-master', label: 'Drawing & Revision Master', icon: 'design_services', screenId: 'drawing-revision-master', tabIcon: 'design_services' },
         ],
       },
       {
@@ -194,6 +197,20 @@ export const NAV_ITEMS: NavTopItem[] = [
       },
       {
         type: 'item',
+        id: 'enquiry',
+        label: 'Enquiry / RFQ',
+        icon: 'contact_support',
+        screenId: 'enquiry',
+      },
+      {
+        type: 'item',
+        id: 'quotation',
+        label: 'Quotation (Costed)',
+        icon: 'request_quote',
+        screenId: 'quotation',
+      },
+      {
+        type: 'item',
         id: 'sales-order',
         label: 'Sales Order',
         icon: 'shopping_cart',
@@ -227,6 +244,20 @@ export const NAV_ITEMS: NavTopItem[] = [
         label: 'SO Schedule',
         icon: 'calendar_month',
         screenId: 'sales-schedule',
+      },
+      {
+        type: 'item',
+        id: 'payment-receipt',
+        label: 'Payment Collection',
+        icon: 'payments',
+        screenId: 'payment-receipt',
+      },
+      {
+        type: 'item',
+        id: 'credit-debit-note',
+        label: 'Credit / Debit Note',
+        icon: 'difference',
+        screenId: 'credit-debit-note',
       },
       {
         type: 'group',
@@ -788,6 +819,13 @@ export const NAV_ITEMS: NavTopItem[] = [
             label: 'Idle Time',
             icon: 'schedule',
             screenId: 'idle-time',
+          },
+          {
+            type: 'item',
+            id: 'tool-life',
+            label: 'Tool Life / Tool Change',
+            icon: 'construction',
+            screenId: 'tool-life',
           },
           {
             type: 'item',

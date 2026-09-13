@@ -133,6 +133,15 @@ public class AttachmentService {
     }
 
     @Transactional(readOnly = true)
+    public Attachment getById(Long id) {
+        Attachment att = em.find(Attachment.class, id);
+        if (att == null || att.getDeletedAt() != null) {
+            throw new IllegalArgumentException("Attachment not found: " + id);
+        }
+        return att;
+    }
+
+    @Transactional(readOnly = true)
     public List<Attachment> list(String ownerType, Long ownerId) {
         return em.createQuery(
                 "SELECT a FROM Attachment a WHERE a.ownerType = :ot AND a.ownerId = :oid AND a.deletedAt IS NULL ORDER BY a.uploadedAt DESC",

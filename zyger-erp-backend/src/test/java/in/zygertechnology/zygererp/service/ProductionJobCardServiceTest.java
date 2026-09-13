@@ -45,6 +45,8 @@ class ProductionJobCardServiceTest {
     @Mock private ProductionStockBoundary inventory;
     @Mock private ProductionQualityGateService qualityGate;
     @Mock private jakarta.persistence.EntityManager em;
+    @Mock private in.zygertechnology.zygererp.repo.ProductionPolicyRepository productionPolicies;
+    @Mock private in.zygertechnology.zygererp.repo.MachineCapabilityRepository machineCapabilities;
     @Mock private Principal principal;
 
     @InjectMocks private ProductionJobCardService svc;

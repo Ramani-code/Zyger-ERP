@@ -2,12 +2,14 @@ package in.zygertechnology.zygererp.controller;
 
 import in.zygertechnology.zygererp.entity.*;
 import in.zygertechnology.zygererp.repository.*;
+import in.zygertechnology.zygererp.security.RequirePermission;
 import org.springframework.web.bind.annotation.*;
 import java.util.*;
 import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/v2/master")
+@RequirePermission(module = "MASTER", screen = "*", action = "VIEW")
 public class MasterDataController {
 
     private final PlantMasterRepository plantRepo;

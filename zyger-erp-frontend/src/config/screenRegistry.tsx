@@ -87,6 +87,10 @@ const SalesInvoicePage = lazy(() => import('../pages/sales/invoice/SalesInvoiceP
 const DcReturnSalesPage = lazy(() => import('../pages/sales/return/dc/DcReturnSalesPage'));
 const InvoiceReturnSalesPage = lazy(() => import('../pages/sales/return/invoice/InvoiceReturnSalesPage'));
 const SoSchedulePage = lazy(() => import('../pages/sales/schedule/SoSchedulePage'));
+const PaymentReceiptPage = lazy(() => import('../pages/sales/payment/PaymentReceiptPage'));
+const CreditDebitNotePage = lazy(() => import('../pages/sales/credit-note/CreditDebitNotePage'));
+const EnquiryPage = lazy(() => import('../pages/sales/enquiry/EnquiryPage'));
+const QuotationPage = lazy(() => import('../pages/sales/quotation/QuotationPage'));
 const ConcessionPage = lazy(() => import('../pages/quality/concession/ConcessionPage'));
 const InwardTestCertificatePage = lazy(() => import('../pages/quality/certificate/InwardTestCertificatePage'));
 const InternalTestCertificatePage = lazy(() => import('../pages/quality/certificate/InternalTestCertificatePage'));
@@ -130,6 +134,7 @@ const MaterialRequestScreen = lazy(() => import('../pages/production/material-re
 const ConsumptionScreen = lazy(() => import('../pages/production/consumption/ConsumptionScreen'));
 const ProductionLogScreen = lazy(() => import('../pages/production/production-log/ProductionLogScreen'));
 const IdleTimeScreen = lazy(() => import('../pages/production/idle-time/IdleTimeScreen'));
+const ToolLifeScreen = lazy(() => import('../pages/production/tool-life/ToolLifeScreen'));
 const ProductionPendingScreen = lazy(() => import('../pages/production/production-pending/ProductionPendingScreen'));
 const ProductionReportsScreen = lazy(() => import('../pages/production/reports/ProductionReportsScreen'));
 const ProductionOutputScreen = lazy(() => import('../pages/production/reports/ProductionOutputScreen'));
@@ -162,7 +167,10 @@ const StoreScreen = lazy(() => import('../pages/master/store/StoreScreen'));
 const ProcessGroupScreen = lazy(() => import('../pages/master/process-group/ProcessGroupScreen'));
 const ProcessScreen = lazy(() => import('../pages/master/process/ProcessScreen'));
 const MachineScreen = lazy(() => import('../pages/master/machine/MachineScreen'));
+const MachineCapabilityScreen = lazy(() => import('../pages/master/machine-capability/MachineCapabilityScreen'));
 const InstrumentScreen = lazy(() => import('../pages/master/instrument/InstrumentScreen'));
+const OperatorScreen = lazy(() => import('../pages/master/operator/OperatorScreen'));
+const DrawingRevisionScreen = lazy(() => import('../pages/master/drawing-revision/DrawingRevisionScreen'));
 const ToolScreen = lazy(() => import('../pages/master/tool/ToolScreen'));
 const SubcontractorScreen = lazy(() => import('../pages/master/subcontractor/SubcontractorScreen'));
 const PurchasableItemScreen = lazy(() => import('../pages/master/items/purchasable/PurchasableItemScreen'));
@@ -265,6 +273,10 @@ export const SCREEN_REGISTRY: Record<string, ScreenDefinition> = Object.fromEntr
     'sales-schedule': SoSchedulePage,
     'sales-dc-return': DcReturnSalesPage,
     'sales-invoice-return': InvoiceReturnSalesPage,
+    'payment-receipt': PaymentReceiptPage,
+    'credit-debit-note': CreditDebitNotePage,
+    'enquiry': EnquiryPage,
+    'quotation': QuotationPage,
     'production-bom': ProductionBomFreshScreen,
     'route-sheet': RouteSheetPage,
     'work-order': WorkOrderPage,
@@ -272,6 +284,7 @@ export const SCREEN_REGISTRY: Record<string, ScreenDefinition> = Object.fromEntr
     'shop-floor-entry': ShopFloorPage,
     'work-center': WorkCenterPage,
     'machine-master': MachineScreen,
+    'machine-capability': MachineCapabilityScreen,
     'operation-master': OperationPage,
     'party-master': PartyMasterScreen,
     'location-master': LocationMasterScreen,
@@ -301,6 +314,7 @@ export const SCREEN_REGISTRY: Record<string, ScreenDefinition> = Object.fromEntr
     'consumption': ConsumptionScreen,
     'production-log': ProductionLogScreen,
     'idle-time': IdleTimeScreen,
+    'tool-life': ToolLifeScreen,
     'production-pending': ProductionPendingScreen,
     'production-reports': ProductionReportsScreen,
     'production-output': ProductionOutputScreen,
@@ -335,6 +349,8 @@ export const SCREEN_REGISTRY: Record<string, ScreenDefinition> = Object.fromEntr
     'process-group-master': ProcessGroupScreen,
     'process-master': ProcessScreen,
     'instrument-master': InstrumentScreen,
+    'operator-master': OperatorScreen,
+    'drawing-revision-master': DrawingRevisionScreen,
     'tool-master': ToolScreen,
     'subcontractor-master': SubcontractorScreen,
     'purchasable-item': PurchasableItemScreen,

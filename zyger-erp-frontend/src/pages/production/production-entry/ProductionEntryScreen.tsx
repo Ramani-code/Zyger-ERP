@@ -46,6 +46,7 @@ interface ProductionEntryItem {
   startTime?: string;
   endTime?: string;
   processTime?: number;
+  cycleTimeVarianceFlagged?: boolean;
   processRate?: number;
   mhr?: number;
   itemWeight?: number;
@@ -345,16 +346,36 @@ export default function ProductionEntryScreen() {
     }
 
     setBusy(true);
+    const submit = async (body: Record<string, unknown>) => {
+      if (editId) {
+        const { data } = await apiClient.put(`/v1/production/entries/${editId}`, body);
+        toast('Production Entry draft updated.');
+        return data as ProductionEntryItem;
+      }
+      const { data } = await apiClient.post('/v1/production/entries', body);
+      toast('Production Entry created.');
+      return data as ProductionEntryItem;
+    };
+
     try {
       let result: ProductionEntryItem;
-      if (editId) {
-        const { data } = await apiClient.put(`/v1/production/entries/${editId}`, payload);
-        result = data;
-        toast('Production Entry draft updated.');
-      } else {
-        const { data } = await apiClient.post('/v1/production/entries', payload);
-        result = data;
-        toast('Production Entry created.');
+      try {
+        result = await submit(payload);
+      } catch (createError) {
+        // BR (Production Module FRS §5.3): cumulative qty past the Job Card's planned
+        // quantity now has a real override path (Production Supervisor/Plant Head + reason)
+        // instead of just being an unconditional block.
+        const code = (createError as any)?.response?.data?.code;
+        if (code === 'OVERPRODUCTION_LIMIT') {
+          const reason = window.prompt(
+            getApiErrorMessage(createError, 'Overproduction blocked.') +
+              '\n\nIf you have Production Supervisor/Plant Head authorization, enter a reason to override:'
+          );
+          if (!reason || !reason.trim()) throw createError;
+          result = await submit({ ...payload, overrideReason: reason.trim() });
+        } else {
+          throw createError;
+        }
       }
 
       if (actionStatus === 'POSTED' && result.id) {
@@ -574,6 +595,7 @@ export default function ProductionEntryScreen() {
               <label className="fld"><span>Start Date-Time</span><input className="in" type="datetime-local" value={String(form.startTime ?? '')} onChange={(e) => set('startTime', e.target.value)} /></label>
               <label className="fld"><span>End Date-Time</span><input className="in" type="datetime-local" value={String(form.endTime ?? '')} onChange={(e) => set('endTime', e.target.value)} /></label>
               <label className="fld"><span>Idle Time (Mins)</span><input className="in" type="number" value={String(form.idleTime ?? 0)} onChange={(e) => set('idleTime', Number(e.target.value))} /></label>
+              <label className="fld"><span>Actual Run Time (Mins)</span><input className="in" readOnly value={form.processTime != null ? String(form.processTime) : 'Computed on save'} /></label>
               <label className="fld"><span>Idle Reason</span><input className="in" placeholder="Required if Idle Time > 0" value={String(form.idleReason ?? '')} onChange={(e) => set('idleReason', e.target.value)} /></label>
             </div>
           </div>
@@ -770,7 +792,11 @@ export default function ProductionEntryScreen() {
                   {filtered.length === 0 ? <tr><td colSpan={12}><div className="empty"><span className="material-symbols-rounded">description</span> No matching production entries.</div></td></tr> : filtered.map((r, idx) => (
                     <tr key={r.id}>
                       <td className="num mut">{idx + 1}</td>
-                      <td><b>{r.entryNumber}</b></td>
+                      <td><b>{r.entryNumber}</b>{r.cycleTimeVarianceFlagged && (
+                        <span title="Actual Run Time exceeded standard cycle time beyond tolerance" style={{ marginLeft: 6, display: 'inline-flex', padding: '1px 6px', fontSize: 11, borderRadius: 8, background: '#fef3c7', color: '#92400e' }}>
+                          <span className="material-symbols-rounded" style={{ fontSize: 13 }}>timer_off</span>
+                        </span>
+                      )}</td>
                       <td><span style={{ fontSize: 11, padding: '2px 6px', borderRadius: 4, background: r.productionType === 'REWORK' ? '#fef3c7' : '#f1f5f9', color: r.productionType === 'REWORK' ? '#92400e' : '#475569' }}>{r.productionType || 'GENERAL'}</span></td>
                       <td>{r.workOrderNumber}</td>
                       <td>{r.partCode}</td>

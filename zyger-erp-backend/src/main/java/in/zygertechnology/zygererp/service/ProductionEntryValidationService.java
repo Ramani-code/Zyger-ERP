@@ -204,6 +204,27 @@ public class ProductionEntryValidationService {
         }
     }
 
+    /**
+     * Production Module FRS §5.3 BR (audit gap): "Start of a new job on a machine
+     * automatically closes/pauses any previously open job card entry on that machine,
+     * preventing overlapping active entries" — nothing enforced this at all before. This
+     * takes the simpler, safer half of that rule: block the second overlapping start rather
+     * than silently auto-closing someone else's still-running entry out from under them.
+     */
+    public void validateMachineNotAlreadyRunning(ProductionEntry entry) {
+        if (entry.getMachineCode() == null || entry.getMachineCode().isBlank()) return;
+        if (entry.getStartTime() == null || entry.getEndTime() != null) return;
+
+        Long excludeId = entry.getId() != null ? entry.getId() : -1L;
+        List<ProductionEntry> open = productionEntryRepo.findOpenByMachineCode(entry.getMachineCode(), excludeId);
+        if (!open.isEmpty()) {
+            ProductionEntry other = open.get(0);
+            throw new IllegalStateException("Machine " + entry.getMachineCode()
+                    + " already has a running entry (" + (other.getEntryNumber() != null ? other.getEntryNumber() : other.getId())
+                    + "). End or pause it before starting another.");
+        }
+    }
+
     public void validateSequenceAndPending(ProductionEntry entry) {
         if (entry.getJobCardNumber() == null || entry.getJobCardNumber().isBlank()) return;
 
@@ -256,7 +277,19 @@ public class ProductionEntryValidationService {
                 : (entry.getProducedQuantity() != null ? entry.getProducedQuantity() : BigDecimal.ZERO);
 
         if (processQty.compareTo(remainingPending) > 0) {
-            throw new IllegalArgumentException("Entered quantity (" + processQty + ") exceeds the available pending quantity (" + remainingPending + ").");
+            // Production Module FRS §5.3 BR: cumulative Good+Rejected+Rework cannot exceed
+            // Planned Qty without a supervisor override + mandatory reason — this used to be
+            // an unconditional hard block with no such path at all.
+            String overrideReason = entry.getOverrideReason();
+            boolean authorized = overrideReason != null && !overrideReason.isBlank()
+                    && in.zygertechnology.zygererp.security.CurrentUserRoles.hasAnyRole(
+                            "ADMIN", "PRODUCTION_SUPERVISOR", "PLANT_HEAD");
+            if (!authorized) {
+                throw new in.zygertechnology.zygererp.config.BusinessRuleException("OVERPRODUCTION_LIMIT",
+                        "Entered quantity (" + processQty + ") exceeds the available pending quantity ("
+                                + remainingPending + "). A Production Supervisor/Plant Head can override this with a reason.",
+                        java.util.Map.of("processQty", processQty, "remainingPending", remainingPending));
+            }
         }
     }
 }

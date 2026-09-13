@@ -790,7 +790,19 @@ public class MaintenanceService {
         switch (action.toLowerCase()) {
             case "assign": t.setStatus("ASSIGNED"); break;
             case "in-progress": t.setStatus("IN_PROGRESS"); break;
-            case "close": t.setStatus("CLOSED"); break;
+            case "close":
+                // Maintenance Module audit: this used to close with no gate at all, unlike
+                // Breakdown's BR-03 ("at least one rectification must have testingResult=PASS").
+                // Mirrors that same rule here for consistency between the two reactive-repair
+                // flows.
+                List<ToolServiceRectification> tRects = toolRectifications.findByServiceId(id);
+                boolean toolHasPassed = tRects.stream().anyMatch(r -> "PASS".equals(r.getResult()));
+                if (!toolHasPassed) {
+                    throw new IllegalStateException(
+                        "Cannot close: at least one rectification must have result=PASS (BR-TSI-01)");
+                }
+                t.setStatus("CLOSED");
+                break;
             case "cancel": t.setStatus("CANCELLED"); break;
             default: throw new RuntimeException("Unknown action: " + action);
         }
@@ -843,9 +855,28 @@ public class MaintenanceService {
         ToolServiceRectification r = toolRectifications.findById(id).orElseThrow(() -> new RuntimeException("Tool Rectification not found"));
         switch (action.toLowerCase()) {
             case "complete": r.setStatus("COMPLETED"); r.setServiceEnd(Instant.now()); break;
-            case "close": r.setStatus("CLOSED"); finalizeCostOnClose("TOOLING", r.getId()); break;
-            case "pass": r.setResult("PASS"); break;
-            case "fail": r.setResult("FAIL"); break;
+            case "close":
+                // Maintenance Module audit: mirrors BreakdownRectification's BR-01 gate — this
+                // previously required nothing beyond the current status.
+                if (!"COMPLETED".equals(r.getStatus()) || !"PASS".equals(r.getResult())) {
+                    throw new IllegalStateException(
+                        "Cannot close: rectification must be COMPLETED with result=PASS (BR-TSR-01)");
+                }
+                r.setStatus("CLOSED");
+                finalizeCostOnClose("TOOLING", r.getId());
+                break;
+            case "pass":
+                if (!"COMPLETED".equals(r.getStatus())) {
+                    throw new IllegalStateException("Cannot mark PASS before rectification is COMPLETED (BR-TSR-01)");
+                }
+                r.setResult("PASS");
+                break;
+            case "fail":
+                r.setResult("FAIL");
+                if ("COMPLETED".equals(r.getStatus())) {
+                    r.setStatus("IN_PROGRESS"); // rework — return to in-progress, matching Breakdown's pattern
+                }
+                break;
             default: throw new RuntimeException("Unknown action: " + action);
         }
         audit(r, principalName(principal));
@@ -1224,8 +1255,13 @@ public class MaintenanceService {
             .mapToDouble(r -> r.getDowntimeMinutes().doubleValue())
             .sum();
 
-        double mtbf = failureCount > 0 ? (totalDowntime > 0 ? totalDowntime / failureCount : 0) : 0;
+        // Maintenance Module audit: this used to compute mtbf with the exact same formula as
+        // mttr (totalDowntime / failureCount for both), so the two values were always
+        // identical — a real bug. MTBF is mean time BETWEEN failures, so it needs real
+        // operating (uptime) hours, not repair time — matching how mtbfAnalysis() (the
+        // all-machines endpoint the dashboard actually uses) already computes it correctly.
         double mttr = failureCount > 0 ? totalDowntime / failureCount : 0;
+        double mtbf = failureCount > 0 ? operatingHoursFor(machineCode, totalDowntime) * 60.0 / failureCount : 0;
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("machineCode", machineCode);

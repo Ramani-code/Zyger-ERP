@@ -6,10 +6,14 @@ import in.zygertechnology.zygererp.entity.ItemMaster;
 import in.zygertechnology.zygererp.entity.PMSchedule;
 import in.zygertechnology.zygererp.entity.PurchaseOrder;
 import in.zygertechnology.zygererp.entity.WorkOrder;
+import in.zygertechnology.zygererp.entity.SalesOrder;
+import in.zygertechnology.zygererp.entity.SalesInvoice;
+import in.zygertechnology.zygererp.entity.Party;
 import in.zygertechnology.zygererp.repo.CalibrationScheduleRepository;
 import in.zygertechnology.zygererp.repo.InstrumentMasterRepository;
 import in.zygertechnology.zygererp.repo.NotificationRepository;
 import in.zygertechnology.zygererp.repo.PMScheduleRepository;
+import in.zygertechnology.zygererp.repo.PartyRepository;
 import in.zygertechnology.zygererp.repo.RefreshTokenRepository;
 import in.zygertechnology.zygererp.service.EscalationEngine;
 import in.zygertechnology.zygererp.service.EmailService;
@@ -50,6 +54,7 @@ public class ScheduledJobs {
     private final EscalationEngine escalationEngine;
     private final EmailService emailService;
     private final PMScheduleRepository pmSchedules;
+    private final PartyRepository parties;
     private final CalibrationScheduleRepository calSchedules;
     private final InstrumentMasterRepository instruments;
 
@@ -349,10 +354,14 @@ public class ScheduledJobs {
     public void populateOeeDaily() {
         try {
             LocalDate yesterday = LocalDate.now().minusDays(1);
-            // Get machines that had production entries yesterday
+            // Get machines that had production entries yesterday. This used to read
+            // shop_floor_entry — a separate, parallel entry screen from the canonical
+            // Production Entry (production_entry table) that shop-floor users actually use
+            // (Production Module FRS audit finding: OEE silently never populated with real
+            // data because the two tables track different rows).
             List<Object[]> prodMachines = em.createNativeQuery(
-                    "SELECT DISTINCT machine_code FROM shop_floor_entry " +
-                    "WHERE DATE(doc_date) = :date AND status = 'COMPLETED' AND deleted_at IS NULL",
+                    "SELECT DISTINCT machine_code FROM production_entry " +
+                    "WHERE DATE(production_date) = :date AND status = 'POSTED' AND machine_code IS NOT NULL",
                     Object[].class)
                     .setParameter("date", yesterday)
                     .getResultList();
@@ -383,15 +392,15 @@ public class ScheduledJobs {
 
                 // FRS §7.5: Compute performance and quality from production data
                 Number goodQty = (Number) em.createNativeQuery(
-                        "SELECT COALESCE(SUM(completed_quantity), 0) FROM shop_floor_entry " +
-                        "WHERE machine_code = :mc AND DATE(doc_date) = :date AND status = 'COMPLETED' AND deleted_at IS NULL")
+                        "SELECT COALESCE(SUM(good_quantity), 0) FROM production_entry " +
+                        "WHERE machine_code = :mc AND DATE(production_date) = :date AND status = 'POSTED'")
                         .setParameter("mc", machineCode)
                         .setParameter("date", yesterday)
                         .getSingleResult();
                 Number totalQty = (Number) em.createNativeQuery(
-                        "SELECT COALESCE(SUM(completed_quantity + COALESCE(rejected_quantity,0) + COALESCE(scrap_quantity,0)), 0) " +
-                        "FROM shop_floor_entry " +
-                        "WHERE machine_code = :mc AND DATE(doc_date) = :date AND status = 'COMPLETED' AND deleted_at IS NULL")
+                        "SELECT COALESCE(SUM(good_quantity + COALESCE(rejected_quantity,0) + COALESCE(scrap_quantity,0)), 0) " +
+                        "FROM production_entry " +
+                        "WHERE machine_code = :mc AND DATE(production_date) = :date AND status = 'POSTED'")
                         .setParameter("mc", machineCode)
                         .setParameter("date", yesterday)
                         .getSingleResult();
@@ -654,6 +663,87 @@ public class ScheduledJobs {
             log.info("[Calibration Status Recalc] {} calibration record(s) updated", updated);
         } catch (Exception ex) {
             log.error("[Calibration Status Recalc] Failed", ex);
+        }
+    }
+
+    /**
+     * Sales Module SLA timer (Technical Design §3.5): escalates Sales Orders that
+     * have sat in a PENDING_TIER1/2/3 approval status past the configured SLA
+     * window (Improvement Plan §E4/§E6). Runs twice daily — a 24h SLA only needs
+     * checking a couple of times a day, not every few minutes.
+     */
+    @Scheduled(cron = "${zyger.scheduling.sales-approval-sla:0 0 9,15 * * *}")
+    public void salesApprovalSlaCheck() {
+        try {
+            int slaHours = 24;
+            Instant cutoff = Instant.now().minus(slaHours, java.time.temporal.ChronoUnit.HOURS);
+            List<SalesOrder> stuck = em.createQuery("""
+                            select s from SalesOrder s
+                            where s.status in ('PENDING_TIER1','PENDING_TIER2','PENDING_TIER3')
+                              and s.submittedAt is not null and s.submittedAt <= :cutoff
+                            order by s.submittedAt asc
+                            """, SalesOrder.class)
+                    .setParameter("cutoff", cutoff)
+                    .getResultList();
+
+            if (stuck.isEmpty()) {
+                log.info("[Sales Approval SLA] No Sales Orders breaching the {}h approval SLA.", slaHours);
+                return;
+            }
+            log.warn("[Sales Approval SLA] {} Sales Order(s) past the {}h approval SLA.", stuck.size(), slaHours);
+            for (SalesOrder so : stuck) {
+                notifyOnce("APPROVAL_SLA_BREACHED", "SALES", "sales-order", so.getId(), "WARNING",
+                        "Sales Order " + so.getDocNo() + " has been awaiting " + so.getStatus() +
+                                " approval for more than " + slaHours + "h", so.getDocNo());
+            }
+        } catch (Exception ex) {
+            log.error("[Sales Approval SLA] Failed to run Sales approval SLA check", ex);
+        }
+    }
+
+    /**
+     * D3 "Ageing-based auto-hold": flags a customer for Credit Hold once any of
+     * their invoices is overdue beyond the configured grace period. Only ever
+     * SETS the hold, never clears one — reversal requires an authorized override
+     * on the Party record itself, per D3's logged-override-trail requirement.
+     */
+    @Scheduled(cron = "${zyger.scheduling.sales-credit-autohold:0 30 9 * * *}")
+    @Transactional
+    public void salesCreditAutoHoldCheck() {
+        try {
+            int graceDays = 60;
+            LocalDate cutoff = LocalDate.now().minusDays(graceDays);
+            List<Object[]> overdue = em.createQuery("""
+                            select i.customerCode, i.customer
+                            from SalesInvoice i
+                            where i.status in ('POSTED','PARTIALLY_PAID')
+                              and coalesce(i.dueDate, i.docDate) < :cutoff
+                            group by i.customerCode, i.customer
+                            """, Object[].class)
+                    .setParameter("cutoff", cutoff)
+                    .getResultList();
+
+            if (overdue.isEmpty()) {
+                log.info("[Sales Credit Auto-Hold] No customers overdue beyond {} days.", graceDays);
+                return;
+            }
+            int flagged = 0;
+            for (Object[] row : overdue) {
+                String customerCode = (String) row[0];
+                String customerName = (String) row[1];
+                if (customerCode == null || customerCode.isBlank()) continue;
+                Party party = parties.findByCode(customerCode).orElse(null);
+                if (party == null || Boolean.TRUE.equals(party.getCreditHold())) continue;
+                party.setCreditHold(true);
+                party.setCreditHoldReason("Auto-hold: invoice(s) overdue beyond " + graceDays + " days (as of " + LocalDate.now() + ")");
+                notificationService.notify("CREDIT_HOLD_AUTO_TRIGGERED", "SALES", "party", party.getId(), "CRITICAL",
+                        "Customer " + customerName + " (" + customerCode + ") auto-placed on Credit Hold — invoice(s) overdue beyond " + graceDays + " days",
+                        customerCode);
+                flagged++;
+            }
+            log.warn("[Sales Credit Auto-Hold] {} customer(s) newly placed on Credit Hold (overdue beyond {} days).", flagged, graceDays);
+        } catch (Exception ex) {
+            log.error("[Sales Credit Auto-Hold] Failed to run Sales credit auto-hold check", ex);
         }
     }
 }

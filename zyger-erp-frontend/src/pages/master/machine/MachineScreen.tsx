@@ -34,6 +34,14 @@ export interface MachineItem {
   zAxisTravel?: number;
   rapidTraverse?: number;
 
+  // CNC-shop target-state FRS fields
+  machineClass?: string;
+  axisCount?: number;
+  spindleSpeedMin?: number;
+  spindleSpeedMax?: number;
+  chuckOrTableSize?: string;
+  linkedMeterId?: number;
+
   // Tailstock & Auxiliary Specs
   tailstockType?: string;
   tailstockStroke?: number;
@@ -85,6 +93,13 @@ export default function MachineScreen() {
   const [yAxisTravel, setYAxisTravel] = useState<number>(0);
   const [zAxisTravel, setZAxisTravel] = useState<number>(520);
   const [rapidTraverse, setRapidTraverse] = useState<number>(30);
+
+  // CNC-shop target-state FRS fields
+  const [machineClass, setMachineClass] = useState('CNC Turning');
+  const [axisCount, setAxisCount] = useState<number>(2);
+  const [spindleSpeedMin, setSpindleSpeedMin] = useState<number>(0);
+  const [spindleSpeedMax, setSpindleSpeedMax] = useState<number>(4500);
+  const [chuckOrTableSize, setChuckOrTableSize] = useState('250mm 3-Jaw Chuck');
 
   // Tailstock & Aux Specs
   const [tailstockType, setTailstockType] = useState('Hydraulic Programmable');
@@ -139,6 +154,12 @@ export default function MachineScreen() {
     setZAxisTravel(0);
     setRapidTraverse(0);
 
+    setMachineClass('');
+    setAxisCount(0);
+    setSpindleSpeedMin(0);
+    setSpindleSpeedMax(0);
+    setChuckOrTableSize('');
+
     setTailstockType('');
     setTailstockStroke(0);
     setQuillDiameter(0);
@@ -183,6 +204,12 @@ export default function MachineScreen() {
     setZAxisTravel(item.zAxisTravel || 520);
     setRapidTraverse(item.rapidTraverse || 30);
 
+    setMachineClass(item.machineClass || 'CNC Turning');
+    setAxisCount(item.axisCount || 2);
+    setSpindleSpeedMin(item.spindleSpeedMin || 0);
+    setSpindleSpeedMax(item.spindleSpeedMax || 4500);
+    setChuckOrTableSize(item.chuckOrTableSize || '');
+
     setTailstockType(item.tailstockType || 'Hydraulic Programmable');
     setTailstockStroke(item.tailstockStroke || 100);
     setQuillDiameter(item.quillDiameter || 75);
@@ -226,6 +253,11 @@ export default function MachineScreen() {
         yAxisTravel,
         zAxisTravel,
         rapidTraverse,
+        machineClass,
+        axisCount,
+        spindleSpeedMin,
+        spindleSpeedMax,
+        chuckOrTableSize,
         tailstockType,
         tailstockStroke,
         quillDiameter,
@@ -542,6 +574,39 @@ export default function MachineScreen() {
 
           <div className="sec-body" style={{ background: '#fff', border: '1px solid #bfdbfe', borderRadius: '0 0 12px 12px', padding: '24px', marginBottom: '24px' }}>
             <div className="fgrid" style={{ gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px' }}>
+              <label className="fld">
+                <span>MACHINE CLASS</span>
+                <select className="in" value={machineClass} onChange={e => setMachineClass(e.target.value)}>
+                  <option value="CNC Turning">CNC Turning</option>
+                  <option value="CNC Milling">CNC Milling</option>
+                  <option value="VMC">VMC</option>
+                  <option value="HMC">HMC</option>
+                  <option value="CNC Grinding">CNC Grinding</option>
+                  <option value="Conventional">Conventional</option>
+                  <option value="Inspection Equipment">Inspection Equipment</option>
+                </select>
+              </label>
+
+              <label className="fld">
+                <span>NO. OF AXES</span>
+                <input className="in" type="number" value={axisCount} onChange={e => setAxisCount(parseInt(e.target.value))} placeholder="2" />
+              </label>
+
+              <label className="fld">
+                <span>CHUCK / TABLE SIZE</span>
+                <input className="in" type="text" value={chuckOrTableSize} onChange={e => setChuckOrTableSize(e.target.value)} placeholder="250mm 3-Jaw Chuck" />
+              </label>
+
+              <label className="fld">
+                <span>SPINDLE SPEED MIN (RPM)</span>
+                <input className="in" type="number" value={spindleSpeedMin} onChange={e => setSpindleSpeedMin(parseInt(e.target.value))} placeholder="0" />
+              </label>
+
+              <label className="fld">
+                <span>SPINDLE SPEED MAX (RPM)</span>
+                <input className="in" type="number" value={spindleSpeedMax} onChange={e => setSpindleSpeedMax(parseInt(e.target.value))} placeholder="4500" />
+              </label>
+
               <label className="fld">
                 <span>CONTROLLER BRAND</span>
                 <select className="in" value={controllerBrand} onChange={e => setControllerBrand(e.target.value)}>

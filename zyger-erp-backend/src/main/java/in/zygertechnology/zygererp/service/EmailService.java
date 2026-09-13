@@ -201,6 +201,26 @@ public class EmailService {
         return dispatch(sender, recipient, null, subject, body, null, null, "USER_STATUS");
     }
 
+    /**
+     * Send a Sales Invoice email to the customer with the invoice PDF attached —
+     * parity with the Purchase module's PO email (Technical Design §2.5).
+     */
+    public boolean sendSalesInvoiceEmail(SalesInvoice invoice, String toEmail, String ccEmail, byte[] pdf, String pdfName) {
+        if (invoice == null) throw new IllegalArgumentException("invoice is required");
+        String recipient = toEmail == null || toEmail.isBlank() ? null : toEmail;
+        if (recipient == null || recipient.isBlank()) {
+            log.error("Cannot send Invoice email for doc {}: Recipient email is missing.", invoice.getDocNo());
+            return false;
+        }
+        CompanyInfo company = companyInfoRepository.findAll().stream().findFirst().orElse(null);
+        String sender = fromEmailOverride != null && !fromEmailOverride.isBlank()
+                ? fromEmailOverride
+                : (company != null && company.getEmail() != null ? company.getEmail() : "noreply@zyger.local");
+        String subject = "Tax Invoice - " + invoice.getDocNo() + " | " + safe(invoice.getCustomer());
+        String body = buildSalesInvoiceHtmlBody(invoice, company);
+        return dispatch(sender, recipient, ccEmail, subject, body, pdf, pdfName, invoice.getDocNo());
+    }
+
     // ─── private helpers ──────────────────────────────────────────────
 
     private boolean dispatch(String from, String to, String cc, String subject, String body,
@@ -340,6 +360,50 @@ public class EmailService {
                     ? "<div style=\"background:#fef3c7;border:1px solid #fde68a;border-radius:6px;padding:10px 12px;font-size:12px;color:#92400e;\"><b>Remarks:</b> " + escape(po.getRemarks()) + "</div>"
                     : "")
                 + "<p style=\"font-size:12px;color:#475569;margin-top:16px;\">Regards,<br/>" + escape(safe(po.getBuyer())) + "<br/>" + escape(companyName) + "</p>"
+                + "</div></div>";
+    }
+
+    private String buildSalesInvoiceHtmlBody(SalesInvoice invoice, CompanyInfo company) {
+        String companyName = company != null && company.getCompanyName() != null ? company.getCompanyName() : "Zyger Precision Manufacturing";
+        StringBuilder items = new StringBuilder();
+        if (invoice.getLines() != null) {
+            for (SalesInvoiceItem it : invoice.getLines()) {
+                java.math.BigDecimal lineTotal = it.getNetAmount() != null ? it.getNetAmount() : java.math.BigDecimal.ZERO;
+                items.append("<tr>")
+                        .append("<td style=\"padding:6px 8px;border:1px solid #e2e8f0;\">").append(safe(it.getItemCode())).append("</td>")
+                        .append("<td style=\"padding:6px 8px;border:1px solid #e2e8f0;text-align:right;\">").append(it.getQty() != null ? it.getQty().toPlainString() : "").append("</td>")
+                        .append("<td style=\"padding:6px 8px;border:1px solid #e2e8f0;\">").append(safe(it.getUom())).append("</td>")
+                        .append("<td style=\"padding:6px 8px;border:1px solid #e2e8f0;text-align:right;\">").append(it.getUnitPrice() != null ? it.getUnitPrice().toPlainString() : "").append("</td>")
+                        .append("<td style=\"padding:6px 8px;border:1px solid #e2e8f0;text-align:right;\">").append(lineTotal.toPlainString()).append("</td>")
+                        .append("</tr>");
+            }
+        }
+        java.math.BigDecimal total = invoice.getTotalAmount() != null ? invoice.getTotalAmount() : java.math.BigDecimal.ZERO;
+        return "<div style=\"font-family:Arial,Helvetica,sans-serif;max-width:760px;margin:auto;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;\">"
+                + "<div style=\"background:#0f172a;color:#fff;padding:16px 24px;\">"
+                + "<div style=\"font-size:18px;font-weight:bold;\">" + escape(safe(companyName)) + "</div>"
+                + "</div>"
+                + "<div style=\"padding:24px;\">"
+                + "<div style=\"font-size:16px;font-weight:bold;color:#0f172a;\">TAX INVOICE — " + escape(safe(invoice.getDocNo())) + "</div>"
+                + "<div style=\"font-size:12px;color:#64748b;margin-top:4px;\">Dear " + escape(safe(invoice.getCustomer())) + ",</div>"
+                + "<p style=\"font-size:13px;color:#334155;\">Please find attached our tax invoice for goods dispatched as per the details below.</p>"
+                + "<table style=\"width:100%;border-collapse:collapse;font-size:12px;margin:12px 0;\">"
+                + "<tr><td style=\"padding:4px 8px;color:#64748b;width:50%;\">Customer</td><td style=\"padding:4px 8px;font-weight:bold;\">" + escape(safe(invoice.getCustomer())) + "</td></tr>"
+                + "<tr><td style=\"padding:4px 8px;color:#64748b;\">Invoice Date</td><td style=\"padding:4px 8px;\">" + fmtDate(invoice.getDocDate()) + "</td></tr>"
+                + "<tr><td style=\"padding:4px 8px;color:#64748b;\">Payment Due Date</td><td style=\"padding:4px 8px;\">" + fmtDate(invoice.getDueDate()) + "</td></tr>"
+                + "<tr><td style=\"padding:4px 8px;color:#64748b;\">Customer GSTIN</td><td style=\"padding:4px 8px;\">" + escape(safe(invoice.getCustomerGstin())) + "</td></tr>"
+                + "</table>"
+                + "<table style=\"width:100%;border-collapse:collapse;font-size:12px;margin:12px 0;\">"
+                + "<tr style=\"background:#f1f5f9;\"><th style=\"padding:6px 8px;border:1px solid #e2e8f0;text-align:left;color:#334155;\">Item</th>"
+                + "<th style=\"padding:6px 8px;border:1px solid #e2e8f0;text-align:right;color:#334155;\">Qty</th>"
+                + "<th style=\"padding:6px 8px;border:1px solid #e2e8f0;text-align:left;color:#334155;\">UOM</th>"
+                + "<th style=\"padding:6px 8px;border:1px solid #e2e8f0;text-align:right;color:#334155;\">Rate</th>"
+                + "<th style=\"padding:6px 8px;border:1px solid #e2e8f0;text-align:right;color:#334155;\">Amount</th></tr>"
+                + items
+                + "<tr><td colspan=\"4\" style=\"padding:6px 8px;border:1px solid #e2e8f0;text-align:right;font-weight:bold;\">Total</td>"
+                + "<td style=\"padding:6px 8px;border:1px solid #e2e8f0;text-align:right;font-weight:bold;\">" + total.toPlainString() + "</td></tr>"
+                + "</table>"
+                + "<p style=\"font-size:12px;color:#475569;margin-top:16px;\">Regards,<br/>" + escape(companyName) + "</p>"
                 + "</div></div>";
     }
 

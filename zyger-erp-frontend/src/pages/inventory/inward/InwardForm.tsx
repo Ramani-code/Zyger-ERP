@@ -21,6 +21,7 @@ import { logSystemActivity } from '../../../utils/activityLog';
 import { filterPurchaseRelevantItems } from '../../../utils/itemClassification';
 import StatusBadge from '../../../components/common/StatusBadge';
 import ConfirmActionModal from '../../../components/common/ConfirmActionModal';
+import AttachmentsDrawer from '../../../components/common/AttachmentsDrawer';
 
 interface InwardFormProps {
   inwardType?: InwardType;
@@ -172,26 +173,10 @@ export default function InwardForm({
   const [rejectReasonInput, setRejectReasonInput] = useState('');
   const [showUpdateInventoryConfirm, setShowUpdateInventoryConfirm] = useState(false);
 
-  // File Attachment State & Handlers
-  const [attachments, setAttachments] = useState<Array<{ id: string; name: string; size: string; url?: string }>>([]);
-
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-    const newAtts = Array.from(files).map(file => ({
-      id: Math.random().toString(36).substring(2, 9),
-      name: file.name,
-      size: `${(file.size / 1024).toFixed(1)} KB`,
-      url: URL.createObjectURL(file),
-    }));
-    setAttachments(prev => [...prev, ...newAtts]);
-    toast(`${newAtts.length} file(s) attached.`);
-  };
-
-  const removeAttachment = (id: string) => {
-    setAttachments(prev => prev.filter(a => a.id !== id));
-    toast('Attachment removed.');
-  };
+  // File Attachment: persisted server-side via the generic Attachments API,
+  // keyed by this document's doc-type key (config.apiPath) + numeric id.
+  const [attachmentsOpen, setAttachmentsOpen] = useState(false);
+  const attachmentOwnerType = config.apiPath.replace('/inventory/documents/', '');
 
   const documentQuery = useInwardDocument(inwardType, documentId);
   const nextNumberQuery = useInwardNextNumber(lockedType ? null : inwardType);
@@ -489,6 +474,8 @@ export default function InwardForm({
         rejectedReason: line.rejectedReason || undefined,
         batchNo: line.batchNo || undefined,
         heatNo: line.heatNo || undefined,
+        lotNo: line.lotNo || undefined,
+        serialNo: line.serialNo || undefined,
         location: line.location,
         remarks: line.remarks || undefined,
       })),
@@ -520,16 +507,35 @@ export default function InwardForm({
           payload,
         });
       } else {
-        saved = await mutations.createMutation.mutateAsync({
-          inwardType,
-          payload,
-        });
+        try {
+          saved = await mutations.createMutation.mutateAsync({
+            inwardType,
+            payload,
+          });
+        } catch (createError) {
+          // BR-06: a genuine override now exists server-side (Store Manager/Admin + reason) —
+          // offer it inline instead of just reporting the block as before.
+          const code = (createError as any)?.response?.data?.code;
+          if (code === 'BACKDATED_ENTRY') {
+            const reason = window.prompt(
+              getApiErrorMessage(createError, 'Backdated entry blocked.') +
+                '\n\nIf you have Store Manager/Admin authorization, enter a reason to override:'
+            );
+            if (!reason || !reason.trim()) throw createError;
+            saved = await mutations.createMutation.mutateAsync({
+              inwardType,
+              payload: { ...payload, backdatedOverrideReason: reason.trim() },
+            });
+          } else {
+            throw createError;
+          }
+        }
       }
 
       if (submit && saved.id) {
         const isQc = (header.qcRequired === 'Yes' || header.qcRequired === 'Y' || header.qcRequired === 'true');
         if (isQc) {
-          if (saved.status !== 'SUBMITTED') {
+          if (saved.status !== 'SUBMITTED' && saved.status !== 'POSTED') {
             saved = await mutations.actionMutation.mutateAsync({
               inwardType,
               id: saved.id,
@@ -537,7 +543,21 @@ export default function InwardForm({
               note: 'Submitted for Quality Inspection',
             });
           }
-          toast(`⚠️ Sent to QC — ${saved.docNo ?? docNo} has been submitted & routed to Inward Inspection (IQC).`, 'success');
+          // Inward Entry FRD v2.0 (G1, resolved): the receipt is a completed fact the moment
+          // it's submitted, so it posts immediately too — stock lands in the QC_HOLD bucket
+          // (server-side, per line's qcRequired), visible as held rather than invisible.
+          // The already-auto-created QualityInspection (linked via sourceId) is what tracks
+          // whether it's actually cleared; its own accept/reject releases or rejects that
+          // held stock. This is what makes the "Post" button's old dead end unnecessary.
+          if (saved.status !== 'POSTED') {
+            saved = await mutations.actionMutation.mutateAsync({
+              inwardType,
+              id: saved.id,
+              action: 'post',
+              note: 'Received — stock held pending Quality Inspection (IQC)',
+            });
+          }
+          toast(`⚠️ Received into QC Hold — ${saved.docNo ?? docNo} stock is held pending Quality Inspection (IQC).`, 'success');
           window.location.hash = '#/inward-inspection-iqc';
         } else {
           // Direct Store Addition - bypass QC
@@ -649,7 +669,9 @@ export default function InwardForm({
       setActionModal({
         action,
         title: `Cancel ${docNumber}`,
-        body: 'This creates an auditable reversal.',
+        body: status === 'POSTED'
+          ? 'This document has already updated stock. Cancelling will reverse that stock exactly, and requires a reason (Store Manager/Admin only). It will be blocked if this receipt has already been issued or dispatched downstream.'
+          : 'This creates an auditable reversal.',
         okLabel: 'Cancel Document',
         danger: true,
       });
@@ -696,78 +718,29 @@ export default function InwardForm({
     const value = field.type === 'auto' ? docNo : header[field.key] ?? '';
 
     if (field.type === 'attachment') {
+      const ownerId = documentId ?? currentDocument?.id ?? null;
       return (
         <label key={field.key} className="fld span2" style={{ gridColumn: 'span 2' }}>
           <span>{field.label}</span>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '6px' }}>
-            {editable && (
+            {ownerId ? (
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                <label className="btn btn-sm" style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px', background: '#2563eb', color: '#fff', border: 'none', padding: '6px 14px', borderRadius: '6px', fontWeight: 600 }}>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => setAttachmentsOpen(true)}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', background: '#2563eb', color: '#fff', border: 'none', padding: '6px 14px', borderRadius: '6px', fontWeight: 600, cursor: 'pointer' }}
+                >
                   <span className="material-symbols-rounded" style={{ fontSize: '18px' }}>attach_file</span>
-                  Choose File to Attach
-                  <input
-                    type="file"
-                    multiple
-                    style={{ display: 'none' }}
-                    onChange={handleFileUpload}
-                  />
-                </label>
+                  Manage Attachments
+                </button>
                 <span style={{ fontSize: '12px', color: '#64748b' }}>
-                  Attach Supplier Invoice, Delivery Challan, Quality Report, or Images (Max 10MB)
+                  Supplier Invoice, Delivery Challan, Quality Report, or Images — stored on the server, survives refresh
                 </span>
-              </div>
-            )}
-
-            {attachments.length > 0 ? (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '4px' }}>
-                {attachments.map(att => (
-                  <div
-                    key={att.id}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                      padding: '6px 12px',
-                      background: '#f8fafc',
-                      border: '1px solid #cbd5e1',
-                      borderRadius: '6px',
-                      fontSize: '13px',
-                    }}
-                  >
-                    <span className="material-symbols-rounded" style={{ fontSize: '18px', color: '#2563eb' }}>
-                      description
-                    </span>
-                    <span style={{ fontWeight: 600, color: '#1e293b' }}>{att.name}</span>
-                    <span style={{ fontSize: '11px', color: '#64748b' }}>({att.size})</span>
-                    {att.url && (
-                      <a
-                        href={att.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="lbtn"
-                        title="Download Attachment"
-                        style={{ display: 'inline-flex', alignItems: 'center', color: '#2563eb', textDecoration: 'none', marginLeft: '4px' }}
-                      >
-                        <span className="material-symbols-rounded" style={{ fontSize: '16px' }}>download</span>
-                      </a>
-                    )}
-                    {editable && (
-                      <button
-                        type="button"
-                        className="lbtn danger"
-                        onClick={() => removeAttachment(att.id)}
-                        title="Remove Attachment"
-                        style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, marginLeft: '4px' }}
-                      >
-                        <span className="material-symbols-rounded" style={{ fontSize: '16px', color: '#ef4444' }}>close</span>
-                      </button>
-                    )}
-                  </div>
-                ))}
               </div>
             ) : (
               <div style={{ fontSize: '12px', color: '#94a3b8', fontStyle: 'italic' }}>
-                No file attached yet. Click "Choose File to Attach" above to upload invoice/challan copies.
+                Save this document as a draft first, then attach invoice/challan copies.
               </div>
             )}
           </div>
@@ -893,6 +866,36 @@ export default function InwardForm({
         );
       }
       const isNumAuto = field.key === 'amount' || field.key === 'taxAmount' || field.key === 'netAmount';
+
+      // Informational only, per Inward Entry FRD v2.0 §6.2/A-2: shows the Item Master's
+      // purchase-vs-stock UOM conversion when it applies, without changing what quantity
+      // actually posts to stock — that stays exactly as entered, as it always has.
+      if (field.key === 'uom') {
+        const item = options.items.find((i) => i.code === line.itemCode) as
+          | { purchaseUom?: string; conversionFactor?: number }
+          | undefined;
+        const showConversion = item?.purchaseUom && item.purchaseUom !== value && item.conversionFactor != null;
+        return (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1px' }}>
+            <input
+              className="in"
+              style={{ minWidth: '65px', padding: '5px 6px', fontSize: '.74rem', width: '100%' }}
+              value={value}
+              readOnly
+              tabIndex={-1}
+            />
+            {showConversion && (
+              <span
+                style={{ fontSize: '.62rem', color: '#64748b', whiteSpace: 'nowrap' }}
+                title="Item Master conversion — the quantity entered above is posted to stock as-is, in this UOM; this is shown for reference only."
+              >
+                1 {item!.purchaseUom} = {item!.conversionFactor} {value}
+              </span>
+            )}
+          </div>
+        );
+      }
+
       return (
         <input
           className="in"
@@ -1172,11 +1175,12 @@ export default function InwardForm({
             </button>
           )}
 
-          {!['POSTED', 'CANCELLED'].includes(status) && (
+          {status !== 'CANCELLED' && (
             <button
               className="btn btn-d"
               onClick={() => openActionModal('cancel')}
               disabled={isBusy}
+              title={status === 'POSTED' ? 'Reverses the stock this receipt added — Store Manager/Admin only' : undefined}
             >
               <span className="material-symbols-rounded">block</span>
               Cancel
@@ -1271,6 +1275,14 @@ export default function InwardForm({
           await save(true);
         }}
       />
+
+      {attachmentsOpen && (documentId ?? currentDocument?.id) && (
+        <AttachmentsDrawer
+          ownerType={attachmentOwnerType}
+          ownerId={Number(documentId ?? currentDocument?.id)}
+          onClose={() => setAttachmentsOpen(false)}
+        />
+      )}
     </>
   );
 }

@@ -1,6 +1,10 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { salesApi } from '../services/sales-api';
-import type { QualityDocAction } from '../types/quality/quality.types';
+
+export type SalesDocAction =
+  | 'submit' | 'approve' | 'reject' | 'reopen' | 'cancel' | 'post' | 'close'
+  // SCR-103 Payment Collection (Phase 2)
+  | 'allocate' | 'reverse';
 
 export interface SalesDocListParams {
   page?: number;
@@ -68,8 +72,8 @@ export function useSalesDocDelete(docType: string) {
 export function useSalesDocAction(docType: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: ({ id, action, note }: { id: number | string; action: QualityDocAction; note?: string }) =>
-      salesApi.docAction(docType, id, action, note),
+    mutationFn: ({ id, action, note, options }: { id: number | string; action: SalesDocAction; note?: string; options?: Record<string, unknown> }) =>
+      salesApi.docAction(docType, id, action, note, options),
     onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['sales-doc', docType] });
       queryClient.invalidateQueries({ queryKey: ['sales-doc', docType, 'doc', variables.id] });

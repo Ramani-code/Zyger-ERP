@@ -25,6 +25,11 @@ public class ItemMaster {
     @Column(name = "drawing_number", length = 60) String drawingNumber;
     @Column(name = "drawing_revision", length = 30) String drawingRevision;
     @Column(length = 30) String revision;
+    /** Forward FK to the canonical Drawing & Revision Master row for this item's current
+     * drawing/revision — {@code drawingNumber}/{@code drawingRevision} above stay as the
+     * denormalized display fields (too many existing read sites to remove them), this is
+     * the new source of truth going forward. */
+    @Column(name = "active_drawing_revision_id") Long activeDrawingRevisionId;
     @Column(name = "lead_time_days") Integer leadTimeDays;
     @Column(name = "min_order_qty") BigDecimal minOrderQty;
     @Column(name = "order_multiple") BigDecimal orderMultiple;
@@ -32,7 +37,6 @@ public class ItemMaster {
     @Builder.Default Boolean batchControl = Boolean.FALSE;
     @Builder.Default Boolean serialControl = Boolean.FALSE;
     @Column(name = "inspection_required") @Builder.Default Boolean inspectionRequired = Boolean.FALSE;
-    @Column(name = "batch_heat_mandatory") @Builder.Default Boolean batchHeatMandatory = Boolean.FALSE;
     @Column(name = "serial_generation_rule", length = 30) @Builder.Default String serialGenerationRule = "NONE";
     @Column(name = "fg_serial_prefix", length = 60) String fgSerialPrefix;
     @Column(name = "default_warehouse", length = 60) String defaultWarehouse;

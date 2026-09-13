@@ -60,6 +60,7 @@ public class PlanningMasterController {
     public List<MaterialPlan> listMaterialPlans() { return materialPlans.findAll(); }
 
     @PostMapping("/api/v1/planning/material-plans")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "CREATE")
     public MaterialPlan createMaterialPlan(@RequestBody MaterialPlan p, Principal principal) {
         p.setId(null);
         p.setPlanNumber(numbers.next("material-plan", "MP"));
@@ -76,6 +77,7 @@ public class PlanningMasterController {
     }
 
     @PutMapping("/api/v1/planning/material-plans/{id}")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "EDIT")
     public MaterialPlan updateMaterialPlan(@PathVariable Long id, @RequestBody MaterialPlan p, Principal principal) {
         MaterialPlan e = materialPlans.findById(id).orElseThrow(() -> new RuntimeException("Material Plan not found"));
         p.setId(id);
@@ -88,6 +90,7 @@ public class PlanningMasterController {
     }
 
     @DeleteMapping("/api/v1/planning/material-plans/{id}")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "DELETE")
     public void deleteMaterialPlan(@PathVariable Long id) {
         MaterialPlan e = materialPlans.findById(id).orElseThrow(() -> new RuntimeException("Material Plan not found"));
         if (!"DRAFT".equals(e.getStatus())) throw new RuntimeException("Only DRAFT plans can be deleted");
@@ -101,6 +104,7 @@ public class PlanningMasterController {
     }
 
     @PostMapping("/api/v1/planning/material-plans/{id}/lines")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "CREATE")
     public MaterialPlanLine addMaterialPlanLine(@PathVariable Long id, @RequestBody MaterialPlanLine line, Principal principal) {
         MaterialPlan plan = materialPlans.findById(id).orElseThrow(() -> new RuntimeException("Material Plan not found"));
         line.setId(null);
@@ -125,6 +129,7 @@ public class PlanningMasterController {
     }
 
     @PutMapping("/api/v1/planning/material-plans/lines/{lineId}")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "EDIT")
     public MaterialPlanLine updateMaterialPlanLine(@PathVariable Long lineId, @RequestBody MaterialPlanLine line, Principal principal) {
         MaterialPlanLine e = materialPlanLines.findById(lineId).orElseThrow(() -> new RuntimeException("Material Plan Line not found"));
         line.setId(lineId);
@@ -135,10 +140,12 @@ public class PlanningMasterController {
     }
 
     @DeleteMapping("/api/v1/planning/material-plans/lines/{lineId}")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "DELETE")
     public void deleteMaterialPlanLine(@PathVariable Long lineId) { materialPlanLines.deleteById(lineId); }
 
     // ---- MRP Run ----
     @PostMapping("/api/v1/planning/material-plans/{id}/run")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "APPROVE")
     public MaterialPlan runMRP(@PathVariable Long id) {
         MaterialPlan plan = materialPlans.findById(id).orElseThrow(() -> new RuntimeException("Material Plan not found"));
         materialPlanLines.findByPlanId(id).forEach(l -> materialPlanLines.deleteById(l.getId()));
@@ -174,10 +181,15 @@ public class PlanningMasterController {
                 .map(wo -> wo.getOrderQuantity() == null ? BigDecimal.ZERO : wo.getOrderQuantity())
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
-            BigDecimal wip = grossByItem.entrySet().stream()
-                .filter(e -> e.getKey().equals(itemCode))
-                .map(Map.Entry::getValue)
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
+            // Planning Module audit: this used to re-read grossByItem for the same itemCode,
+            // which — since grossByItem is keyed uniquely per item via merge() — just returned
+            // gross itself. That made wip == gross, which cancelled gross out of the net
+            // formula entirely (net = gross - (onHand+onOrder+gross) + safetyStock reduces to
+            // safetyStock - onHand - onOrder, completely independent of actual demand). There
+            // is no real work-in-process quantity tracked anywhere this run has access to, so
+            // rather than fabricate one, wip is zeroed until a genuine WIP source exists —
+            // this at least restores gross demand actually driving the net requirement.
+            BigDecimal wip = BigDecimal.ZERO;
 
             BigDecimal available = onHand.add(onOrder).add(wip);
             BigDecimal net = gross.subtract(available).add(safetyStock).max(BigDecimal.ZERO);
@@ -245,6 +257,7 @@ public class PlanningMasterController {
     // ===========================
 
     @PostMapping("/api/v1/planning/fg-possible/check")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "APPROVE")
     public Map<String, Object> checkFgPossible(@RequestBody Map<String, Object> body) {
         String itemCode = (String) body.get("itemCode");
         if (itemCode == null || itemCode.isBlank()) throw new RuntimeException("itemCode is required");
@@ -329,6 +342,7 @@ public class PlanningMasterController {
     public List<DispatchPlan> listDispatchPlans() { return dispatchPlans.findAll(); }
 
     @PostMapping("/api/v1/planning/dispatch-plans")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "CREATE")
     public DispatchPlan createDispatchPlan(@RequestBody DispatchPlan p, Principal principal) {
         p.setId(null);
         p.setDispatchNumber(numbers.next("dispatch-plan", "DP"));
@@ -345,6 +359,7 @@ public class PlanningMasterController {
     }
 
     @PutMapping("/api/v1/planning/dispatch-plans/{id}")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "EDIT")
     public DispatchPlan updateDispatchPlan(@PathVariable Long id, @RequestBody DispatchPlan p, Principal principal) {
         DispatchPlan e = dispatchPlans.findById(id).orElseThrow(() -> new RuntimeException("Dispatch Plan not found"));
         p.setId(id);
@@ -357,6 +372,7 @@ public class PlanningMasterController {
     }
 
     @DeleteMapping("/api/v1/planning/dispatch-plans/{id}")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "DELETE")
     public void deleteDispatchPlan(@PathVariable Long id) {
         dispatchPlanLines.findByDispatchPlanId(id).forEach(l -> dispatchPlanLines.deleteById(l.getId()));
         dispatchPlans.deleteById(id);
@@ -368,6 +384,7 @@ public class PlanningMasterController {
     }
 
     @PostMapping("/api/v1/planning/dispatch-plans/{id}/lines")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "CREATE")
     public DispatchPlanLine addDispatchPlanLine(@PathVariable Long id, @RequestBody DispatchPlanLine line, Principal principal) {
         DispatchPlan plan = dispatchPlans.findById(id).orElseThrow(() -> new RuntimeException("Dispatch Plan not found"));
         line.setId(null);
@@ -377,6 +394,7 @@ public class PlanningMasterController {
     }
 
     @PutMapping("/api/v1/planning/dispatch-plans/lines/{lineId}")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "EDIT")
     public DispatchPlanLine updateDispatchPlanLine(@PathVariable Long lineId, @RequestBody DispatchPlanLine line, Principal principal) {
         DispatchPlanLine e = dispatchPlanLines.findById(lineId).orElseThrow(() -> new RuntimeException("Dispatch Plan Line not found"));
         line.setId(lineId);
@@ -387,6 +405,7 @@ public class PlanningMasterController {
     }
 
     @DeleteMapping("/api/v1/planning/dispatch-plans/lines/{lineId}")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "DELETE")
     public void deleteDispatchPlanLine(@PathVariable Long lineId) { dispatchPlanLines.deleteById(lineId); }
 
     // ===========================
@@ -397,6 +416,7 @@ public class PlanningMasterController {
     public List<MachineLoadPlan> listMachineLoadPlans() { return machineLoadPlans.findAll(); }
 
     @PostMapping("/api/v1/planning/machine-load-plans")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "CREATE")
     public MachineLoadPlan createMachineLoadPlan(@RequestBody MachineLoadPlan p, Principal principal) {
         p.setId(null);
         p.setPlanNumber(numbers.next("machine-load-plan", "MLP"));
@@ -412,6 +432,7 @@ public class PlanningMasterController {
     }
 
     @PutMapping("/api/v1/planning/machine-load-plans/{id}")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "EDIT")
     public MachineLoadPlan updateMachineLoadPlan(@PathVariable Long id, @RequestBody MachineLoadPlan p, Principal principal) {
         MachineLoadPlan e = machineLoadPlans.findById(id).orElseThrow(() -> new RuntimeException("Machine Load Plan not found"));
         p.setId(id);
@@ -424,6 +445,7 @@ public class PlanningMasterController {
     }
 
     @DeleteMapping("/api/v1/planning/machine-load-plans/{id}")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "DELETE")
     public void deleteMachineLoadPlan(@PathVariable Long id) {
         machineLoadLines.findByLoadPlanId(id).forEach(l -> machineLoadLines.deleteById(l.getId()));
         machineLoadPlans.deleteById(id);
@@ -435,6 +457,7 @@ public class PlanningMasterController {
     }
 
     @PostMapping("/api/v1/planning/machine-load-plans/{id}/lines")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "CREATE")
     public MachineLoadLine addMachineLoadLine(@PathVariable Long id, @RequestBody MachineLoadLine line, Principal principal) {
         MachineLoadPlan plan = machineLoadPlans.findById(id).orElseThrow(() -> new RuntimeException("Machine Load Plan not found"));
         line.setId(null);
@@ -444,10 +467,12 @@ public class PlanningMasterController {
     }
 
     @DeleteMapping("/api/v1/planning/machine-load-plans/lines/{lineId}")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "DELETE")
     public void deleteMachineLoadLine(@PathVariable Long lineId) { machineLoadLines.deleteById(lineId); }
 
     // ---- Generate load from active WOs ----
     @PostMapping("/api/v1/planning/machine-load-plans/{id}/generate")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "APPROVE")
     public MachineLoadPlan generateMachineLoad(@PathVariable Long id, Principal principal) {
         MachineLoadPlan plan = machineLoadPlans.findById(id).orElseThrow(() -> new RuntimeException("Machine Load Plan not found"));
         machineLoadLines.findByLoadPlanId(id).forEach(l -> machineLoadLines.deleteById(l.getId()));
@@ -525,6 +550,7 @@ public class PlanningMasterController {
     public List<EngineeringChange> listEngineeringChanges() { return engineeringChanges.findAll(); }
 
     @PostMapping("/api/v1/planning/engineering-changes")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "CREATE")
     public EngineeringChange createEngineeringChange(@RequestBody EngineeringChange ec, Principal principal) {
         ec.setId(null);
         ec.setEcrNumber(numbers.next("engineering-change", "ECR"));
@@ -540,6 +566,7 @@ public class PlanningMasterController {
     }
 
     @PutMapping("/api/v1/planning/engineering-changes/{id}")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "EDIT")
     public EngineeringChange updateEngineeringChange(@PathVariable Long id, @RequestBody EngineeringChange ec, Principal principal) {
         EngineeringChange e = engineeringChanges.findById(id).orElseThrow(() -> new RuntimeException("Engineering Change not found"));
         ec.setId(id);
@@ -552,9 +579,11 @@ public class PlanningMasterController {
     }
 
     @DeleteMapping("/api/v1/planning/engineering-changes/{id}")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "DELETE")
     public void deleteEngineeringChange(@PathVariable Long id) { engineeringChanges.deleteById(id); }
 
     @PostMapping("/api/v1/planning/engineering-changes/{id}/actions/{action}")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "APPROVE")
     public EngineeringChange engineeringChangeAction(@PathVariable Long id, @PathVariable String action,
                                                     @RequestBody(required = false) Map<String, String> body,
                                                     Principal principal) {
@@ -614,6 +643,7 @@ public class PlanningMasterController {
     public List<GapAnalysisRun> listGapAnalysisRuns() { return gapAnalysisRuns.findAll(); }
 
     @PostMapping("/api/v1/planning/gap-analysis")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "CREATE")
     public GapAnalysisRun createGapAnalysisRun(@RequestBody GapAnalysisRun run, Principal principal) {
         run.setId(null);
         run.setRunNumber(numbers.next("gap-analysis", "GA"));
@@ -641,6 +671,7 @@ public class PlanningMasterController {
 
     // ---- Run Gap Analysis ----
     @PostMapping("/api/v1/planning/gap-analysis/{id}/run")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "APPROVE")
     public GapAnalysisRun runGapAnalysis(@PathVariable Long id, Principal principal) {
         GapAnalysisRun run = gapAnalysisRuns.findById(id).orElseThrow(() -> new RuntimeException("Gap Analysis Run not found"));
         gapAnalysisResults.findByRunId(id).forEach(r -> gapAnalysisResults.deleteById(r.getId()));
@@ -747,6 +778,7 @@ public class PlanningMasterController {
     public List<CostEstimation> listCostEstimations() { return costEstimations.findAll(); }
 
     @PostMapping("/api/v1/planning/cost-estimations")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "CREATE")
     public CostEstimation createCostEstimation(@RequestBody CostEstimation ce, Principal principal) {
         ce.setId(null);
         ce.setEstimationNumber(numbers.next("cost-estimation", "CE"));
@@ -764,6 +796,7 @@ public class PlanningMasterController {
     }
 
     @PutMapping("/api/v1/planning/cost-estimations/{id}")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "EDIT")
     public CostEstimation updateCostEstimation(@PathVariable Long id, @RequestBody CostEstimation ce, Principal principal) {
         CostEstimation e = costEstimations.findById(id).orElseThrow(() -> new RuntimeException("Cost Estimation not found"));
         ce.setId(id);
@@ -776,6 +809,7 @@ public class PlanningMasterController {
     }
 
     @DeleteMapping("/api/v1/planning/cost-estimations/{id}")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "DELETE")
     public void deleteCostEstimation(@PathVariable Long id) {
         costEstimationLines.findByEstimationId(id).forEach(l -> costEstimationLines.deleteById(l.getId()));
         costEstimations.deleteById(id);
@@ -787,6 +821,7 @@ public class PlanningMasterController {
     }
 
     @PostMapping("/api/v1/planning/cost-estimations/{id}/lines")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "CREATE")
     public CostEstimationLine addCostEstimationLine(@PathVariable Long id, @RequestBody CostEstimationLine line, Principal principal) {
         CostEstimation ce = costEstimations.findById(id).orElseThrow(() -> new RuntimeException("Cost Estimation not found"));
         line.setId(null);
@@ -796,6 +831,7 @@ public class PlanningMasterController {
     }
 
     @PutMapping("/api/v1/planning/cost-estimations/lines/{lineId}")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "EDIT")
     public CostEstimationLine updateCostEstimationLine(@PathVariable Long lineId, @RequestBody CostEstimationLine line, Principal principal) {
         CostEstimationLine e = costEstimationLines.findById(lineId).orElseThrow(() -> new RuntimeException("Cost Estimation Line not found"));
         line.setId(lineId);
@@ -806,9 +842,11 @@ public class PlanningMasterController {
     }
 
     @DeleteMapping("/api/v1/planning/cost-estimations/lines/{lineId}")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "DELETE")
     public void deleteCostEstimationLine(@PathVariable Long lineId) { costEstimationLines.deleteById(lineId); }
 
     @PostMapping("/api/v1/planning/cost-estimations/{id}/actions/{action}")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "APPROVE")
     public CostEstimation costEstimationAction(@PathVariable Long id, @PathVariable String action, Principal principal) {
         CostEstimation ce = costEstimations.findById(id).orElseThrow(() -> new RuntimeException("Cost Estimation not found"));
         switch (action.toLowerCase()) {
@@ -832,6 +870,7 @@ public class PlanningMasterController {
 
     // ---- Auto-calculate cost estimation from BOM + Route ----
     @PostMapping("/api/v1/planning/cost-estimations/{id}/calculate")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "APPROVE")
     public CostEstimation calculateCostEstimation(@PathVariable Long id, Principal principal) {
         CostEstimation ce = costEstimations.findById(id).orElseThrow(() -> new RuntimeException("Cost Estimation not found"));
         costEstimationLines.findByEstimationId(id).forEach(l -> costEstimationLines.deleteById(l.getId()));
@@ -933,6 +972,7 @@ public class PlanningMasterController {
 
     // ---- Cost Estimate vs Actual Reconciliation ----
     @PostMapping("/api/v1/planning/cost-estimations/{id}/reconcile")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "APPROVE")
     public Map<String, Object> reconcileCostEstimation(@PathVariable Long id, Principal principal) {
         CostEstimation ce = costEstimations.findById(id).orElseThrow(() -> new RuntimeException("Cost Estimation not found"));
 
@@ -994,6 +1034,7 @@ public class PlanningMasterController {
     public List<MaterialReservation> listMaterialReservations() { return materialReservations.findAll(); }
 
     @PostMapping("/api/v1/planning/material-reservations")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "CREATE")
     public MaterialReservation createMaterialReservation(@RequestBody MaterialReservation r, Principal principal) {
         r.setId(null);
         r.setReservationNumber(numbers.next("material-reservation", "MRES"));
@@ -1004,6 +1045,7 @@ public class PlanningMasterController {
     }
 
     @PutMapping("/api/v1/planning/material-reservations/{id}")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "EDIT")
     public MaterialReservation updateMaterialReservation(@PathVariable Long id, @RequestBody MaterialReservation r, Principal principal) {
         r.setId(id);
         r.setUpdatedBy(principalName(principal));
@@ -1011,6 +1053,7 @@ public class PlanningMasterController {
     }
 
     @PostMapping("/api/v1/planning/material-reservations/{id}/release")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "APPROVE")
     public MaterialReservation releaseMaterialReservation(@PathVariable Long id) {
         MaterialReservation r = materialReservations.findById(id).orElseThrow(() -> new RuntimeException("Reservation not found"));
         r.setStatus("RELEASED");
@@ -1026,6 +1069,7 @@ public class PlanningMasterController {
     public List<FgPossible> listFgPossible() { return fgPossibles.findAll(); }
 
     @PostMapping("/api/v1/planning/fg-possible-list")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "CREATE")
     public FgPossible createFgPossible(@RequestBody FgPossible fp, Principal principal) {
         fp.setId(null);
         fp.setInquiryNumber(numbers.next("fg-possible", "FGP"));
@@ -1041,6 +1085,7 @@ public class PlanningMasterController {
     }
 
     @PutMapping("/api/v1/planning/fg-possible-list/{id}")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "EDIT")
     public FgPossible updateFgPossible(@PathVariable Long id, @RequestBody FgPossible fp, Principal principal) {
         fp.setId(id);
         fp.setUpdatedBy(principalName(principal));
@@ -1066,6 +1111,7 @@ public class PlanningMasterController {
     }
 
     @PostMapping("/api/v1/planning/route-operations/{opId}/inspections")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "CREATE")
     public RouteOperationInspection addInspection(@PathVariable Long opId, @RequestBody RouteOperationInspection insp) {
         RouteOperation op = em.find(RouteOperation.class, opId);
         if (op == null) throw new RuntimeException("Route Operation not found");
@@ -1075,6 +1121,7 @@ public class PlanningMasterController {
     }
 
     @DeleteMapping("/api/v1/planning/route-inspections/{id}")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "DELETE")
     public void deleteInspection(@PathVariable Long id) {
         routeOpInspections.deleteById(id);
     }
@@ -1169,6 +1216,7 @@ public class PlanningMasterController {
     }
 
     @PutMapping("/api/v1/planning/engineering-changes/{id}/mark-evaluated")
+    @RequirePermission(module = "PLANNING", screen = "*", action = "APPROVE")
     public EngineeringChange markExistingOrdersEvaluated(@PathVariable Long id) {
         EngineeringChange ec = engineeringChanges.findById(id).orElseThrow(() -> new RuntimeException("ECR/ECO not found"));
         ec.setExistingOrdersEvaluated(true);

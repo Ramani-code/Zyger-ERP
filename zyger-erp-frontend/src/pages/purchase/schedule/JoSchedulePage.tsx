@@ -59,6 +59,7 @@ export default function JoSchedulePage() {
   // Detailed Form State for New JO Schedule
   const [newSchedule, setNewSchedule] = useState(() => ({
     refDocNo: '',
+    joId: undefined as number | undefined,
     joNo: '',
     subcontractor: '',
     subcontractorCode: '',
@@ -175,6 +176,7 @@ export default function JoSchedulePage() {
           const l0 = Array.isArray(j.lines) && j.lines[0] ? j.lines[0] : {};
           refs.push({
             id: `JO-${j.docNo}`,
+            joId: j.id,
             docNo: j.docNo,
             type: 'Job Order',
             subcontractor: j.supplierJobWorker || j.supplier || '',
@@ -201,7 +203,8 @@ export default function JoSchedulePage() {
       setNewSchedule((prev) => ({
         ...prev,
         refDocNo: selected.docNo,
-        joNo: `JSCH-${selected.docNo}`,
+        joId: selected.joId,
+        joNo: selected.docNo,
         subcontractor: selected.subcontractor,
         subcontractorCode: selected.subcontractorCode || 'SUB-001',
         process: selected.process || 'Heat Treatment',
@@ -260,77 +263,104 @@ export default function JoSchedulePage() {
     });
   };
 
-  const handleCreateSchedule = (e: React.FormEvent) => {
+  const [saving, setSaving] = useState(false);
+
+  const handleCreateSchedule = async (e: React.FormEvent) => {
     e.preventDefault();
-    const joNumber = newSchedule.joNo.trim() || `JSCH-${Date.now().toString().slice(-4)}`;
-    const created: JoScheduleRow = {
-      id: Date.now(),
-      joNo: joNumber,
-      refDocNo: newSchedule.refDocNo || joNumber,
-      subcontractor: newSchedule.subcontractor.trim() || 'Precision Heat Treaters',
-      subcontractorCode: newSchedule.subcontractorCode,
-      process: newSchedule.process,
-      itemCode: newSchedule.itemCode.trim() || 'ITEM-001',
-      itemDescription: newSchedule.itemDescription,
-      uom: newSchedule.uom,
-      unitPrice: newSchedule.unitPrice,
-      totalAmount: newSchedule.scheduledQty * newSchedule.unitPrice,
-      scheduledQty: Number(newSchedule.scheduledQty) || 100,
-      issueDate: newSchedule.issueDate,
-      expectedReturnDate: newSchedule.expectedReturnDate,
-      receivedQty: 0,
-      pendingQty: Number(newSchedule.scheduledQty) || 100,
-      location: newSchedule.location,
-      priority: newSchedule.priority as any,
-      status: 'PLANNED',
-      remarks: newSchedule.remarks,
-    };
+    // A schedule row only means something tied to a real Job Order — this used to create
+    // a local-only row that vanished on refresh even when a JO was selected, since nothing
+    // was ever persisted. Now it requires a real JO reference and actually saves.
+    if (!newSchedule.joId) {
+      toast('Select a Job Order from "Reference Document" first — a schedule must be tied to a real JO to be saved.', 'error');
+      return;
+    }
+    setSaving(true);
+    try {
+      const { data: savedRow } = await axiosClient.post(
+        `/v1/purchase/job-order/${newSchedule.joId}/schedules`,
+        {
+          itemCode: newSchedule.itemCode.trim(),
+          process: newSchedule.process,
+          scheduledQty: Number(newSchedule.scheduledQty) || 0,
+          issueDate: newSchedule.issueDate,
+          expectedReturnDate: newSchedule.expectedReturnDate,
+          status: 'PLANNED',
+        }
+      );
 
-    setSchedules((prev) => [created, ...prev]);
-    setShowModal(false);
+      const created: JoScheduleRow = {
+        id: savedRow.id,
+        joNo: newSchedule.joNo,
+        refDocNo: newSchedule.refDocNo || newSchedule.joNo,
+        subcontractor: newSchedule.subcontractor.trim(),
+        subcontractorCode: newSchedule.subcontractorCode,
+        process: newSchedule.process,
+        itemCode: newSchedule.itemCode.trim(),
+        itemDescription: newSchedule.itemDescription,
+        uom: newSchedule.uom,
+        unitPrice: newSchedule.unitPrice,
+        totalAmount: newSchedule.scheduledQty * newSchedule.unitPrice,
+        scheduledQty: Number(newSchedule.scheduledQty) || 0,
+        issueDate: newSchedule.issueDate,
+        expectedReturnDate: newSchedule.expectedReturnDate,
+        receivedQty: 0,
+        pendingQty: Number(newSchedule.scheduledQty) || 0,
+        location: newSchedule.location,
+        priority: newSchedule.priority as any,
+        status: 'PLANNED',
+        remarks: newSchedule.remarks,
+      };
 
-    // Trigger Notification Banner
-    setActiveNotification({
-      joNo: created.joNo,
-      subcontractor: created.subcontractor,
-      process: created.process,
-      itemCode: created.itemCode,
-      itemDescription: created.itemDescription,
-      scheduledQty: created.scheduledQty,
-      expectedReturnDate: created.expectedReturnDate,
-    });
+      setSchedules((prev) => [created, ...prev]);
+      setShowModal(false);
 
-    toast(`🔔 Scheduled JO ${created.joNo} for ${created.process}! Go to Job Order to issue job.`, 'success');
+      setActiveNotification({
+        joNo: created.joNo,
+        subcontractor: created.subcontractor,
+        process: created.process,
+        itemCode: created.itemCode,
+        itemDescription: created.itemDescription,
+        scheduledQty: created.scheduledQty,
+        expectedReturnDate: created.expectedReturnDate,
+      });
 
-    logSystemActivity({
-      module: 'Purchase',
-      activity: `Scheduled JO Subcontract (${created.joNo})`,
-      refNo: created.joNo,
-      party: created.subcontractor,
-      user: user?.username || 'Unknown',
-      status: 'PLANNED',
-    });
+      toast(`🔔 Scheduled JO ${created.joNo} for ${created.process}! Go to Job Order to issue job.`, 'success');
 
-    // Reset form
-    setNewSchedule({
-      refDocNo: '',
-      joNo: '',
-      subcontractor: 'Precision Heat Treaters',
-      subcontractorCode: 'SUB-001',
-      process: 'Heat Treatment',
-      itemCode: 'ITEM-001',
-      itemDescription: 'Precision CNC Shaft 25mm',
-      uom: 'PCS',
-      unitPrice: 120,
-      scheduledQty: 100,
-      totalAmount: 12000,
-      contactPerson: '',
-      issueDate: new Date().toISOString().split('T')[0],
-      expectedReturnDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-      location: 'SUBCON-01 - Heat Treatment Bay',
-      priority: 'NORMAL',
-      remarks: '',
-    });
+      logSystemActivity({
+        module: 'Purchase',
+        activity: `Scheduled JO Subcontract (${created.joNo})`,
+        refNo: created.joNo,
+        party: created.subcontractor,
+        user: user?.username || 'Unknown',
+        status: 'PLANNED',
+      });
+
+      setNewSchedule({
+        refDocNo: '',
+        joId: undefined,
+        joNo: '',
+        subcontractor: '',
+        subcontractorCode: '',
+        process: '',
+        itemCode: '',
+        itemDescription: '',
+        uom: '',
+        unitPrice: 0,
+        scheduledQty: 0,
+        totalAmount: 0,
+        contactPerson: '',
+        issueDate: new Date().toISOString().split('T')[0],
+        expectedReturnDate: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+        location: '',
+        priority: 'NORMAL',
+        remarks: '',
+      });
+    } catch (err) {
+      toast('Failed to save the schedule row — see console for details.', 'error');
+      console.error(err);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const filtered = schedules.filter(
@@ -845,9 +875,9 @@ export default function JoSchedulePage() {
                 <button type="button" className="btn btn-s" onClick={() => setShowModal(false)}>
                   Cancel
                 </button>
-                <button type="submit" className="btn btn-p">
+                <button type="submit" className="btn btn-p" disabled={saving}>
                   <span className="material-symbols-rounded">save</span>
-                  Save JO Schedule
+                  {saving ? 'Saving...' : 'Save JO Schedule'}
                 </button>
               </div>
             </form>

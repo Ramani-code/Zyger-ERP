@@ -16,6 +16,10 @@ public class SalesInvoiceItem extends BaseLine implements LineEntity {
     @Column(name="drawing_number", length=60) String drawingNumber;
     @Column(name="drawing_revision", length=30) String drawingRevision;
     @Column(name="sales_dc_reference", length=60) String salesDcReference;
+    /** HSN as it existed in the Item Master at the moment this line was created — frozen
+     * here deliberately so a later change to the Item Master's HSN never rewrites what
+     * was actually declared to GST for this transaction (BR-NEW-012). */
+    @Column(name="hsn_snapshot", length=8) String hsnSnapshot;
     BigDecimal qty;
     @Column(length=30) String uom;
     @Column(name="unit_price") BigDecimal unitPrice;

@@ -2,11 +2,13 @@ package in.zygertechnology.zygererp.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import in.zygertechnology.zygererp.config.AuditEntityListener;
 import java.time.Instant;
 
 @Entity @Table(name = "company_info")
 @EntityListeners(AuditEntityListener.class)
+@JsonIgnoreProperties(ignoreUnknown = true)
 @Getter @Setter @Builder @NoArgsConstructor @AllArgsConstructor
 public class CompanyInfo {
     @Id @GeneratedValue(strategy = GenerationType.IDENTITY) Long id;
@@ -41,6 +43,7 @@ public class CompanyInfo {
     @Column(name = "esi_no", length = 50) String esiNo;
     @Column(name = "iec_code", length = 50) String iecCode;
     @Column(name = "gst_state", length = 60) String gstState;
+    @Column(name = "gst_state_code", length = 2) String gstStateCode;
     @Column(name = "logo_path", length = 500) String logoPath;
     @Column(name = "company_logo_url", length = 500) String companyLogoUrl;
     @Column(name = "iso_logo_url", length = 500) String isoLogoUrl;
@@ -49,6 +52,7 @@ public class CompanyInfo {
     @Column(name = "bank_account", length = 50) String bankAccount;
     @Column(name = "bank_ifsc", length = 30) String bankIfsc;
     @Column(name = "bank_branch", length = 200) String bankBranch;
+    @Column(name = "bank_account_holder", length = 200) String bankAccountHolder;
     String createdBy;
     Instant createdAt;
     String updatedBy;

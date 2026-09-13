@@ -153,9 +153,13 @@ export default function StoreScreen() {
     const targetId = deleteStoreTarget.id;
     setBusy(true);
     try {
-      await apiClient.delete(`/master/stores/${targetId}`);
-      toast('Store deleted.');
-      setStores(prev => prev.filter(s => s.id !== targetId));
+      const { data } = await apiClient.delete(`/master/stores/${targetId}`);
+      if (data?.deactivated) {
+        toast(data.message || 'Store is in use; it was deactivated.', 'success');
+      } else {
+        toast('Store deleted.');
+        setStores(prev => prev.filter(s => s.id !== targetId));
+      }
       setDeleteStoreTarget(null);
       loadAll();
     } catch (e) { toast(getApiErrorMessage(e, 'Delete failed.'), 'error'); }
@@ -189,9 +193,13 @@ export default function StoreScreen() {
     const targetId = deleteRackTarget.id;
     setBusy(true);
     try {
-      await apiClient.delete(`/master/racks/${targetId}`);
-      toast('Rack deleted.');
-      setRacks(prev => prev.filter(r => r.id !== targetId));
+      const { data } = await apiClient.delete(`/master/racks/${targetId}`);
+      if (data?.deactivated) {
+        toast(data.message || 'Rack is in use; it was deactivated.', 'success');
+      } else {
+        toast('Rack deleted.');
+        setRacks(prev => prev.filter(r => r.id !== targetId));
+      }
       setDeleteRackTarget(null);
       loadAll();
     } catch (e) { toast(getApiErrorMessage(e, 'Delete failed.'), 'error'); }
