@@ -1,12 +1,12 @@
 services:
   database:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     environment:
       POSTGRES_DB: zyger_erp
       POSTGRES_USER: zyger
       POSTGRES_PASSWORD: zyger123
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql
     ports:
       - target: 5432
         published: 5433

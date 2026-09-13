@@ -27,7 +27,7 @@ class SalesControllerIntegrationTest extends AbstractPostgresIntegrationTest {
 
     @Container
     @ServiceConnection
-    static final PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine");
+    static final PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:18-alpine");
 
     @Autowired
     private MockMvc mockMvc;

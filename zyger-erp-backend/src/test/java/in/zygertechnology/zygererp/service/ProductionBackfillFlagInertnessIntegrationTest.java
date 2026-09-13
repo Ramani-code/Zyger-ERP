@@ -41,7 +41,7 @@ class ProductionBackfillFlagInertnessIntegrationTest extends AbstractPostgresInt
 
     @Container
     @ServiceConnection
-    static final PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine");
+    static final PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:18-alpine");
 
     @Autowired
     private ProductionBackfillService backfill;

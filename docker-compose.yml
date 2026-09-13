@@ -1,13 +1,15 @@
 services:
   database:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     container_name: Zyger-ERP-Database
     environment:
       POSTGRES_DB: ${DB_NAME:-zyger_erp}
       POSTGRES_USER: ${DB_USERNAME:-zyger}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-zyger123}
+    # NOTE: on PostgreSQL 18 the volume MUST mount /var/lib/postgresql
+    # (not /var/lib/postgresql/data); 18 stores data in a versioned subdir.
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pgdata:/var/lib/postgresql
     ports:
       - "${DB_PORT:-5433}:5432"
     networks:

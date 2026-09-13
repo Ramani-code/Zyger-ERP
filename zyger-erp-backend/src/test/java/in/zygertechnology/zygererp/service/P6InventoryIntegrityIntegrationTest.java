@@ -53,7 +53,7 @@ class P6InventoryIntegrityIntegrationTest extends AbstractPostgresIntegrationTes
 
     @Container
     @ServiceConnection
-    static final PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine");
+    static final PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:18-alpine");
 
     @Autowired private ProductionMaterialRequestService materialRequestService;
     @Autowired private ProductionConsumptionService consumptionService;
