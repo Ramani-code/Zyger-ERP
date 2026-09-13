@@ -8,7 +8,7 @@ import {
   useSalesDocNextNumber,
   useSalesDocUpdate,
 } from '../../../hooks/useSalesDocs';
-import { formatNumber, todayISO } from '../../../utils/format';
+import { todayISO } from '../../../utils/format';
 import { getApiErrorMessage } from '../../../utils/apiError';
 import { useToast } from '../../../contexts/ToastContext';
 import StatusBadge from '../../../components/common/StatusBadge';

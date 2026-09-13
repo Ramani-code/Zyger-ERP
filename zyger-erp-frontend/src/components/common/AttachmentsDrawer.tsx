@@ -57,7 +57,7 @@ export default function AttachmentsDrawer({ ownerType, ownerId, onClose }: Props
     load();
   }
 
-  async function handleDownload(id: number, fileName: string) {
+  async function handleDownload(id: number) {
     try {
       const r = await axiosClient.get(`/attachments/${id}/download`, { responseType: 'blob' });
       const url = URL.createObjectURL(r.data as Blob);
@@ -114,7 +114,7 @@ export default function AttachmentsDrawer({ ownerType, ownerId, onClose }: Props
               </div>
             </div>
             <button
-              onClick={() => handleDownload(a.id, a.fileName)}
+              onClick={() => handleDownload(a.id)}
               title="Download"
               style={{ background: 'none', border: 'none', color: 'var(--blue)', cursor: 'pointer', fontSize: 14, padding: '4px 8px' }}
             >

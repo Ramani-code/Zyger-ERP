@@ -1,7 +1,7 @@
 export interface SalesFieldDef {
   key: string;
   label: string;
-  type?: 'text' | 'number' | 'date' | 'select' | 'checkbox' | 'textarea';
+  type?: 'text' | 'number' | 'date' | 'datetime-local' | 'select' | 'checkbox' | 'textarea';
   options?: string[];
   required?: boolean;
   span2?: boolean;
