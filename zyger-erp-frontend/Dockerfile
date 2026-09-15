@@ -1,10 +1,14 @@
+# syntax=docker/dockerfile:1.7
+
 # ---- Build stage: install deps and build optimized static assets ----
 FROM node:22-alpine AS build
 WORKDIR /app
 
-# Install dependencies (locked to package-lock.json)
+# Install dependencies (locked to package-lock.json). The BuildKit cache
+# mount keeps npm's download cache across redeploys, so `npm ci` only
+# re-downloads packages that actually changed instead of the whole tree.
 COPY package*.json ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm npm ci
 
 # VITE_* env vars are inlined by Vite at build time. Env files (.env*) are
 # excluded from the image via .dockerignore, so expose the API base URL as an

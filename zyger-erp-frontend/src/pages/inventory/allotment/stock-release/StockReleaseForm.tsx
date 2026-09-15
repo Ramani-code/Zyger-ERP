@@ -16,6 +16,7 @@ import { getApiErrorMessage } from '../../../../utils/apiError';
 import { filterPurchaseRelevantItems } from '../../../../utils/itemClassification';
 import StatusBadge from '../../../../components/common/StatusBadge';
 import ConfirmActionModal from '../../../../components/common/ConfirmActionModal';
+import SearchableItemLookup from '../../../../components/common/SearchableItemLookup';
 import { RELEASE_REASON_OPTIONS } from '../../../../config/allotmentConfig';
 import {
   buildPayload,
@@ -666,22 +667,13 @@ export default function StockReleaseForm({
                 {form.lines.map((line, index) => (
                   <tr key={index}>
                     <td className="num mut">{index + 1}</td>
-                    <td>
-                      <select
-                        className="in w-i"
+                    <td className="w-i">
+                      <SearchableItemLookup
                         value={line.itemCode}
                         disabled={!editable}
-                        onChange={(event) =>
-                          updateLine(index, 'itemCode', event.target.value)
-                        }
-                      >
-                        <option value="">— Select Item —</option>
-                        {allowedItems.map((item) => (
-                          <option key={item.code} value={item.code}>
-                            {item.code} — {item.description}
-                          </option>
-                        ))}
-                      </select>
+                        items={allowedItems}
+                        onChange={(val) => updateLine(index, 'itemCode', val)}
+                      />
                     </td>
 
                     <td>

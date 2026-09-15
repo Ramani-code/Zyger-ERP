@@ -18,6 +18,7 @@ import { lookupDocumentByNumber } from '../../../../utils/documentLookup';
 import { logSystemActivity } from '../../../../utils/activityLog';
 import StatusBadge from '../../../../components/common/StatusBadge';
 import ConfirmActionModal from '../../../../components/common/ConfirmActionModal';
+import SearchableItemLookup from '../../../../components/common/SearchableItemLookup';
 import { REASON_CODE_OPTIONS } from '../../../../config/returnManagementConfig';
 import axiosClient from '../../../../api/axiosClient';
 import {
@@ -1067,22 +1068,13 @@ export default function ReturnManagementForm({
                 {form.lines.map((line, index) => (
                   <tr key={index}>
                     <td className="num mut">{index + 1}</td>
-                    <td>
-                      <select
-                        className="in w-i"
+                    <td className="w-i">
+                      <SearchableItemLookup
                         value={line.itemCode}
                         disabled={!editable}
-                        onChange={(event) =>
-                          updateLine(index, 'itemCode', event.target.value)
-                        }
-                      >
-                        <option value="">— Select Item —</option>
-                        {allowedItems.map((item) => (
-                          <option key={item.code} value={item.code}>
-                            {item.code} — {item.description}
-                          </option>
-                        ))}
-                      </select>
+                        items={allowedItems}
+                        onChange={(val) => updateLine(index, 'itemCode', val)}
+                      />
                     </td>
 
                     <td>

@@ -5,9 +5,11 @@ import { getApiErrorMessage } from '../../../utils/apiError';
 import StatusBadge from '../../../components/common/StatusBadge';
 import ConfirmActionModal from '../../../components/common/ConfirmActionModal';
 import AuditHistoryDrawer from '../../../components/common/AuditHistoryDrawer';
+import SearchableItemLookup from '../../../components/common/SearchableItemLookup';
 import BomMappingEditor from './BomMappingEditor';
 import type { BomMappingDoc } from './BomMappingEditor';
 import { TreeRow, type TNode } from './BomMappingEditor';
+import { filterPurchaseRelevantItems } from '../../../utils/itemClassification';
 
 /* ── Types ── */
 
@@ -230,7 +232,7 @@ export default function BomMasterScreen() {
         groupType: (i.groupType as string) || '',
         active: i.active !== false,
       }));
-      setItems(list);
+      setItems(filterPurchaseRelevantItems(list));
       const rawGroups = groupRes.data?.content ?? groupRes.data ?? [];
       setItemGroups(rawGroups);
     } catch { /* silent */ }
@@ -954,8 +956,11 @@ export default function BomMasterScreen() {
               </label>
 
               <label className="fld"><span>BOM Item *</span>
-                <select className="in" value={bom.itemCode} onChange={(e) => {
-                  const code = e.target.value;
+                <SearchableItemLookup
+                  value={bom.itemCode}
+                  disabled={!isEditable && !!editId}
+                  items={filteredItems.map((i) => ({ id: i.id, code: i.code, name: i.name }))}
+                  onChange={(code) => {
                   setField('itemCode', code);
                   // Auto-fill weight and UOM from item master
                   const item = items.find((i) => i.code === code);
@@ -977,12 +982,8 @@ export default function BomMasterScreen() {
                       return { ...p, lines: [firstRow, ...rest] };
                     });
                   }
-                }} disabled={!isEditable && !!editId} required>
-                  <option value="">— Select Item —</option>
-                  {filteredItems.map((i) => (
-                    <option key={i.id} value={i.code}>{i.code} - {i.name}</option>
-                  ))}
-                </select>
+                }}
+                />
               </label>
 
               <label className="fld"><span>Item Type *</span>
@@ -1081,10 +1082,12 @@ export default function BomMasterScreen() {
                           </select>
                         </td>
                         <td>
-                          <select className="in" value={line.componentItemCode} onChange={(e) => onComponentItemSelect(idx, e.target.value)} disabled={!isEditable}>
-                            <option value="">\u2014 Select Item \u2014</option>
-                            {items.map((i) => <option key={i.id} value={i.code}>{i.code} - {i.name}{i.weight ? ` (${i.weight} kg)` : ''}</option>)}
-                          </select>
+                          <SearchableItemLookup
+                            value={line.componentItemCode}
+                            disabled={!isEditable}
+                            items={items.map((i) => ({ id: i.id, code: i.code, name: `${i.name}${i.weight ? ` (${i.weight} kg)` : ''}` }))}
+                            onChange={(val) => onComponentItemSelect(idx, val)}
+                          />
                         </td>
                         <td>
                           <input className="in" type="number" min="0.01" step="0.01" value={line.quantityPer} onChange={(e) => onComponentQtyChange(idx, parseFloat(e.target.value) || 0)} disabled={!isEditable} style={{ width: 80 }} />

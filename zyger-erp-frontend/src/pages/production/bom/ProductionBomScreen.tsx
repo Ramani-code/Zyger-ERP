@@ -4,6 +4,8 @@ import { useToast } from '../../../contexts/ToastContext';
 import { getApiErrorMessage } from '../../../utils/apiError';
 import StatusBadge from '../../../components/common/StatusBadge';
 import AuditHistoryDrawer from '../../../components/common/AuditHistoryDrawer';
+import SearchableItemLookup from '../../../components/common/SearchableItemLookup';
+import { filterPurchaseRelevantItems } from '../../../utils/itemClassification';
 
 interface ItemMasterRow {
   id: number;
@@ -155,7 +157,7 @@ export default function ProductionBomScreen() {
       const itemData = Array.isArray(itemsRes.data)
         ? itemsRes.data
         : itemsRes.data?.content ?? [];
-      setItems(itemData);
+      setItems(filterPurchaseRelevantItems(itemData));
 
       const groupData = Array.isArray(itemGroupsRes.data)
         ? itemGroupsRes.data
@@ -1936,31 +1938,19 @@ export default function ProductionBomScreen() {
 
               <label className="fld" style={{ flex: '2 1 300px' }}>
                 <span>Item <em className="req">*</em></span>
-                <select
-                  className="in"
+                <SearchableItemLookup
                   disabled={!isEditing || !reqItemType}
                   value={reqItemCode}
-                  onChange={(e) => {
-                    setReqItemCode(e.target.value);
-                  }}
-                >
-                  <option value="">— Select Item —</option>
-                  {reqEligibleItems.map((it) => {
+                  items={reqEligibleItems.map((it) => {
                     const hasBom = createdBomItemCodes.has(it.code.toUpperCase());
-                    return (
-                      <option
-                        key={String(it.id)}
-                        value={it.code}
-                        style={{
-                          fontWeight: hasBom ? 700 : 400,
-                          color: hasBom ? '#15803d' : '#0f172a',
-                        }}
-                      >
-                        {hasBom ? '★ [BOM Created] ' : ''}{it.code} — {it.description || it.name || ''}
-                      </option>
-                    );
+                    return {
+                      id: it.id,
+                      code: it.code,
+                      description: `${hasBom ? '★ [BOM Created] ' : ''}${it.description || it.name || ''}`,
+                    };
                   })}
-                </select>
+                  onChange={(val) => setReqItemCode(val)}
+                />
               </label>
 
               {isEditing && (
@@ -2090,18 +2080,11 @@ export default function ProductionBomScreen() {
                             </td>
                             <td>
                               {isEditing ? (
-                                <select
-                                  className="in"
+                                <SearchableItemLookup
                                   value={line.componentItemCode || ''}
-                                  onChange={(e) => handleLineChange(index, 'componentItemCode', e.target.value)}
-                                >
-                                  <option value="">— Select Component —</option>
-                                  {items.map((it) => (
-                                    <option key={String(it.id)} value={it.code}>
-                                      {it.code} — {it.description || it.name || ''} ({it.itemType || 'RM'})
-                                    </option>
-                                  ))}
-                                </select>
+                                  items={items.map((it) => ({ id: it.id, code: it.code, description: `${it.description || it.name || ''} (${it.itemType || 'RM'})` }))}
+                                  onChange={(val) => handleLineChange(index, 'componentItemCode', val)}
+                                />
                               ) : (
                                 <div style={{ fontWeight: 600 }}>{line.componentItemCode}</div>
                               )}

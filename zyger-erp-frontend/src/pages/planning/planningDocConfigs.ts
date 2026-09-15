@@ -30,6 +30,7 @@ export interface LineFieldDef {
   options?: string[];
   readonly?: boolean;
   required?: boolean;
+  width?: string;
 }
 
 export interface ColumnDef {
@@ -120,12 +121,12 @@ export const PRODUCTION_BOM_FRESH_CONFIG: DocScreenConfig = {
   lines: {
     title: 'Components',
     fields: [
-      { key: 'bomLevel', label: 'Level', type: 'text' },
-      { key: 'componentItemCode', label: 'Component Item (Code / Name) *', type: 'text', required: true },
-      { key: 'quantityPer', label: 'Quantity *', type: 'number', required: true },
-      { key: 'weightPerQty', label: 'Weight/Unit', type: 'number' },
-      { key: 'totalWeight', label: 'Total Weight', type: 'number' },
-      { key: 'remarks', label: 'Remarks', type: 'text' },
+      { key: 'bomLevel', label: 'Level', type: 'text', width: '70px' },
+      { key: 'componentItemCode', label: 'Component Item (Code / Name) *', type: 'text', required: true, width: '220px' },
+      { key: 'quantityPer', label: 'Quantity *', type: 'number', required: true, width: '90px' },
+      { key: 'weightPerQty', label: 'Weight/Unit', type: 'number', width: '100px' },
+      { key: 'totalWeight', label: 'Total Weight', type: 'number', width: '100px' },
+      { key: 'remarks', label: 'Remarks', type: 'text', width: '130px' },
     ],
   },
 };
@@ -168,12 +169,12 @@ export const PRODUCTION_BOM_CONFIG: DocScreenConfig = {
   lines: {
     title: 'BOM Components',
     fields: [
-      { key: 'bomLevel', label: 'Level', type: 'text' },
-      { key: 'componentItemCode', label: 'Component Item (Code / Name) *', type: 'text', required: true },
-      { key: 'quantityPer', label: 'Quantity *', type: 'number', required: true },
-      { key: 'weightPerQty', label: 'Weight/Unit', type: 'number' },
-      { key: 'totalWeight', label: 'Total Weight', type: 'number' },
-      { key: 'remarks', label: 'Remarks', type: 'text' },
+      { key: 'bomLevel', label: 'Level', type: 'text', width: '70px' },
+      { key: 'componentItemCode', label: 'Component Item (Code / Name) *', type: 'text', required: true, width: '220px' },
+      { key: 'quantityPer', label: 'Quantity *', type: 'number', required: true, width: '90px' },
+      { key: 'weightPerQty', label: 'Weight/Unit', type: 'number', width: '100px' },
+      { key: 'totalWeight', label: 'Total Weight', type: 'number', width: '100px' },
+      { key: 'remarks', label: 'Remarks', type: 'text', width: '130px' },
     ],
   },
 };
@@ -202,16 +203,16 @@ export const ROUTE_SHEET_CONFIG: DocScreenConfig = {
   lines: {
     title: 'Operations',
     fields: [
-      { key: 'sequenceNo', label: 'Seq # *', type: 'number', required: true },
-      { key: 'processId', label: 'Process *', type: 'text', required: true },
-      { key: 'processCode', label: 'Process Code', type: 'text', readonly: true },
-      { key: 'resourceId', label: 'Resource', type: 'text' },
-      { key: 'resourceType', label: 'Resource Type', type: 'text', readonly: true },
-      { key: 'processType', label: 'Process Type', type: 'text', readonly: true },
-      { key: 'setupTime', label: 'Setup (min) *', type: 'number', required: true },
-      { key: 'cycleTime', label: 'Cycle (min) *', type: 'number', required: true },
-      { key: 'inspectionRequired', label: 'QC Required *', type: 'select', options: ['Yes', 'No'], required: true },
-      { key: 'remarks', label: 'Remarks', type: 'text' },
+      { key: 'sequenceNo', label: 'Seq # *', type: 'number', required: true, width: '75px' },
+      { key: 'processId', label: 'Process *', type: 'text', required: true, width: '170px' },
+      { key: 'processCode', label: 'Process Code', type: 'text', readonly: true, width: '110px' },
+      { key: 'resourceId', label: 'Resource', type: 'text', width: '170px' },
+      { key: 'resourceType', label: 'Resource Type', type: 'text', readonly: true, width: '110px' },
+      { key: 'processType', label: 'Process Type', type: 'text', readonly: true, width: '110px' },
+      { key: 'setupTime', label: 'Setup (min) *', type: 'number', required: true, width: '95px' },
+      { key: 'cycleTime', label: 'Cycle (min) *', type: 'number', required: true, width: '95px' },
+      { key: 'inspectionRequired', label: 'QC Required *', type: 'select', options: ['Yes', 'No'], required: true, width: '110px' },
+      { key: 'remarks', label: 'Remarks', type: 'text', width: '130px' },
     ],
   },
 };
@@ -287,24 +288,24 @@ export const WORK_ORDER_CONFIG: DocScreenConfig = {
   lines: {
     title: 'Operations',
     fields: [
-      { key: 'operationSequence', label: 'Seq # *', type: 'number' },
-      { key: 'operationCode', label: 'Operation', type: 'text' },
-      { key: 'operationDescription', label: 'Description', type: 'text' },
-      { key: 'workCenterCode', label: 'Work Center', type: 'text' },
-      { key: 'machineCode', label: 'Machine', type: 'text' },
-      { key: 'plannedQuantity', label: 'Planned Qty', type: 'number' },
-      { key: 'completedQuantity', label: 'Completed Qty', type: 'number' },
-      { key: 'goodQuantity', label: 'Good Qty', type: 'number' },
-      { key: 'scrapQuantity', label: 'Scrap Qty', type: 'number' },
-      { key: 'reworkQuantity', label: 'Rework Qty', type: 'number' },
-      { key: 'setupTimePlanned', label: 'Setup Planned', type: 'number' },
-      { key: 'setupTimeActual', label: 'Setup Actual', type: 'number' },
-      { key: 'cycleTimePlanned', label: 'Cycle Planned', type: 'number' },
-      { key: 'cycleTimeActual', label: 'Cycle Actual', type: 'number' },
-      { key: 'operator', label: 'Operator', type: 'text' },
-      { key: 'ncProgramReference', label: 'NC Program', type: 'text' },
-      { key: 'status', label: 'Status', type: 'select', options: ['Pending', 'In Progress', 'Completed', 'On Hold'] },
-      { key: 'remarks', label: 'Remarks', type: 'text' },
+      { key: 'operationSequence', label: 'Seq # *', type: 'number', width: '75px' },
+      { key: 'operationCode', label: 'Operation', type: 'text', width: '110px' },
+      { key: 'operationDescription', label: 'Description', type: 'text', width: '140px' },
+      { key: 'workCenterCode', label: 'Work Center', type: 'text', width: '110px' },
+      { key: 'machineCode', label: 'Machine', type: 'text', width: '100px' },
+      { key: 'plannedQuantity', label: 'Planned Qty', type: 'number', width: '95px' },
+      { key: 'completedQuantity', label: 'Completed Qty', type: 'number', width: '100px' },
+      { key: 'goodQuantity', label: 'Good Qty', type: 'number', width: '90px' },
+      { key: 'scrapQuantity', label: 'Scrap Qty', type: 'number', width: '90px' },
+      { key: 'reworkQuantity', label: 'Rework Qty', type: 'number', width: '95px' },
+      { key: 'setupTimePlanned', label: 'Setup Planned', type: 'number', width: '100px' },
+      { key: 'setupTimeActual', label: 'Setup Actual', type: 'number', width: '95px' },
+      { key: 'cycleTimePlanned', label: 'Cycle Planned', type: 'number', width: '100px' },
+      { key: 'cycleTimeActual', label: 'Cycle Actual', type: 'number', width: '95px' },
+      { key: 'operator', label: 'Operator', type: 'text', width: '100px' },
+      { key: 'ncProgramReference', label: 'NC Program', type: 'text', width: '110px' },
+      { key: 'status', label: 'Status', type: 'select', options: ['Pending', 'In Progress', 'Completed', 'On Hold'], width: '120px' },
+      { key: 'remarks', label: 'Remarks', type: 'text', width: '120px' },
     ],
   },
 };

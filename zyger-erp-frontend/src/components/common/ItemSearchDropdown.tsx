@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import apiClient from '../../api/axiosClient';
+import { filterPurchaseRelevantItems } from '../../utils/itemClassification';
 
 export interface ItemSearchResult {
   id?: number | string;
@@ -59,7 +60,7 @@ export default function ItemSearchDropdown({
         const response = await apiClient.get(`/master/items?search=${encodeURIComponent(query.trim())}&size=20`);
         const data: any = response.data;
         const itemsList = Array.isArray(data) ? data : data?.content || [];
-        setResults(itemsList);
+        setResults(filterPurchaseRelevantItems(itemsList));
         setOpen(itemsList.length > 0);
       } catch (err) {
         console.error('Failed to search items:', err);

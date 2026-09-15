@@ -16,6 +16,8 @@ import { useToast } from '../../contexts/ToastContext';
 import StatusBadge from '../../components/common/StatusBadge';
 import ConfirmActionModal from '../../components/common/ConfirmActionModal';
 import AuditHistoryDrawer from '../../components/common/AuditHistoryDrawer';
+import SearchableItemLookup from '../../components/common/SearchableItemLookup';
+import { filterPurchaseRelevantItems } from '../../utils/itemClassification';
 import ConflictModal from '../../components/common/ConflictModal';
 import { auditEntityTypeFor } from '../../utils/auditEntity';
 import { exportToCsv } from '../../utils/csvExport';
@@ -197,7 +199,7 @@ export default function PlanningDocScreen({ config, initialDocId, viewOnly = fal
     apiClient.get('/master/items', { params: { size: 1000 } }).then((r) => {
       const d = r.data as { content?: unknown[] } | unknown[];
       const list = Array.isArray(d) ? d : (d?.content ?? []);
-      setItems(list as Array<Record<string, unknown>>);
+      setItems(filterPurchaseRelevantItems(list as Array<Record<string, unknown>>));
     }).catch(() => { });
   }, []);
 
@@ -310,7 +312,7 @@ export default function PlanningDocScreen({ config, initialDocId, viewOnly = fal
     setInitializedForId('');
     setIsViewOnly(view);
     setForm(config.typeFilter && defaultType ? { [config.typeFilter.field]: defaultType } : config.docType === 'production-bom' ? { baseQuantity: '1', weight: '0' } : {});
-    setLines(config.lines?.seed ? config.lines.seed.map((s) => ({ ...s })) : []);
+    setLines(config.lines?.seed ? config.lines.seed.map((s) => ({ ...s })) : (config.lines ? [{ sequenceNo: 10 }] : []));
     setMode('form');
   };
 
@@ -771,25 +773,25 @@ export default function PlanningDocScreen({ config, initialDocId, viewOnly = fal
                 <label key={field.key} className={`fld ${field.span2 ? 'span2' : ''} ${isFieldError(field.key) ? 'invalid' : ''}`}>
                   <span>{field.label}</span>
                   {isRouteSheet && field.key === 'itemCode' ? (
-                    <select className="in" disabled={!editable} value={String(form[field.key] ?? '')}
-                      onChange={(e) => {
-                        const code = e.target.value;
+                    <SearchableItemLookup
+                      disabled={!editable}
+                      value={String(form[field.key] ?? '')}
+                      items={items.map((it) => ({ id: String(it.id ?? it.code ?? ''), code: String(it.code ?? ''), name: it.name ? String(it.name) : undefined, description: it.description ? String(it.description) : undefined }))}
+                      onChange={(code) => {
                         const it = items.find((i) => String(i.code) === code);
                         let derivedType = it ? String(it.itemType ?? '') : '';
                         if (it && (String(it.code ?? '').toLowerCase().includes('wheel') || String(it.description ?? '').toLowerCase().includes('wheel') || String(it.name ?? '').toLowerCase().includes('wheel') || derivedType === 'CUSTOMER_SUPPLIED' || derivedType === 'Customer_supplied' || derivedType === 'CSM')) {
                           derivedType = 'SEMI_FG';
                         }
                         setForm((c) => ({ ...c, itemCode: code, itemType: derivedType || c.itemType }));
-                      }}>
-                      <option value="">{'\u2014 Select Item \u2014'}</option>
-                      {items.map((it) => (
-                        <option key={String(it.id)} value={String(it.code ?? '')}>{String(it.code ?? '')} — {String(it.description ?? it.name ?? '')}</option>
-                      ))}
-                    </select>
+                      }}
+                    />
                   ) : isProductionBomItem ? (
-                    <select className="in" disabled={!editable || gatedOff} value={String(form[field.key] ?? '')}
-                      onChange={(e) => {
-                        const code = e.target.value;
+                    <SearchableItemLookup
+                      disabled={!editable || gatedOff}
+                      value={String(form[field.key] ?? '')}
+                      items={bomItemOptions.map((it) => ({ id: String(it.id ?? it.code ?? ''), code: String(it.code ?? ''), description: it.description ? String(it.description) : undefined }))}
+                      onChange={(code) => {
                         const it = items.find((i) => String(i.code) === code);
                         const unitWt = Number(it?.weight ?? it?.netWeight ?? 0);
                         const qty = Number(form.baseQuantity ?? 1);
@@ -803,12 +805,8 @@ export default function PlanningDocScreen({ config, initialDocId, viewOnly = fal
                           description: it && it.description ? String(it.description) : c.description,
                           ...(unitWt > 0 ? { weight: String(computedWt) } : {}),
                         }));
-                      }}>
-                      <option value="">{'\u2014 Select Item \u2014'}</option>
-                      {bomItemOptions.map((it) => (
-                        <option key={String(it.id)} value={String(it.code ?? '')}>{String(it.code ?? '')} — {String(it.description ?? '')}</option>
-                      ))}
-                    </select>
+                      }}
+                    />
                   ) : field.lookup ? (
                     <select className="in" disabled={isFieldReadonly || !editable} value={String(form[field.key] ?? '')}
                       onChange={(e) => {
@@ -870,13 +868,13 @@ export default function PlanningDocScreen({ config, initialDocId, viewOnly = fal
             </div>
             <div className="twrap">
               <table className="tbl lines">
-                <thead><tr><th className="num">S.No</th>{config.lines.fields.map((f) => <th key={f.key}>{f.label}</th>)}{!config.lines.seed && <th></th>}</tr></thead>
+                <thead><tr><th className="num">S.No</th>{config.lines.fields.map((f) => <th key={f.key} style={f.width ? { width: f.width, minWidth: f.width } : undefined}>{f.label}</th>)}{!config.lines.seed && <th></th>}</tr></thead>
                 <tbody>
                   {lines.map((line, index) => (
                     <tr key={index} onClick={() => config.childGrids && setSelectedLineIdx(selectedLineIdx === index ? null : index)} style={config.childGrids ? { cursor: 'pointer' } : undefined} className={selectedLineIdx === index ? 'selected-row' : ''}>
                       <td className="num mut">{index + 1}</td>
                       {config.lines!.fields.map((f) => (
-                        <td key={f.key}>
+                        <td key={f.key} style={f.width ? { width: f.width, minWidth: f.width } : undefined}>
                           {docType === 'route-sheet' && f.key === 'processId' ? (
                             <select className="in" value={String(line[f.key] ?? '')} onChange={(e) => {
                               const selectedId = e.target.value;
@@ -926,44 +924,40 @@ export default function PlanningDocScreen({ config, initialDocId, viewOnly = fal
                               <option value="">\u2014</option>
                               {(f.options ?? []).map((o) => <option key={o} value={o}>{o}</option>)}
                             </select>
+                          ) : config.docType === 'production-bom' && f.key === 'componentItemCode' ? (
+                            <SearchableItemLookup
+                              disabled={f.readonly || !editable}
+                              value={String(line.componentItemCode ?? '')}
+                              items={items.map((it) => ({ id: String(it.id ?? it.code ?? ''), code: String(it.code ?? ''), description: it.description ? String(it.description) : undefined }))}
+                              onChange={(code) => {
+                                setLines((c) =>
+                                  c.map((l, i) => {
+                                    if (i !== index) return l;
+                                    const item = items.find((i2) => String(i2.code) === code);
+                                    const unitWt = Number(item?.weight ?? item?.netWeight ?? 0);
+                                    const qty = Number(l.quantityPer ?? 1);
+                                    const totW = unitWt * qty;
+                                    return {
+                                      ...l,
+                                      componentItemCode: code,
+                                      description: String(item?.description ?? item?.name ?? ''),
+                                      ...(unitWt > 0 ? { weightPerQty: String(unitWt), totalWeight: totW > 0 ? String(totW) : l.totalWeight } : {})
+                                    };
+                                  })
+                                );
+                              }}
+                            />
                           ) : (
                             <input
                               className="in"
                               type={f.type ?? 'text'}
                               readOnly={f.readonly || !editable}
-                              value={
-                                config.docType === 'production-bom' && f.key === 'componentItemCode'
-                                  ? (line.componentItemCode
-                                    ? (line.description && !String(line.componentItemCode).includes(String(line.description))
-                                      ? `${line.componentItemCode} — ${line.description}`
-                                      : String(line.componentItemCode))
-                                    : String(line.description ?? ''))
-                                  : String(line[f.key] ?? '')
-                              }
+                              value={String(line[f.key] ?? '')}
                               onChange={(e) => {
                                 const val = e.target.value;
                                 setLines((c) =>
                                   c.map((l, i) => {
                                     if (i !== index) return l;
-                                    if (config.docType === 'production-bom' && f.key === 'componentItemCode') {
-                                      let code = val;
-                                      let desc = l.description;
-                                      if (val.includes(' — ')) {
-                                        const parts = val.split(' — ');
-                                        code = parts[0].trim();
-                                        desc = parts.slice(1).join(' — ').trim();
-                                      }
-                                      const item = items.find((i) => String(i.code) === code);
-                                      const unitWt = Number(item?.weight ?? item?.netWeight ?? 0);
-                                      const qty = Number(l.quantityPer ?? 1);
-                                      const totW = unitWt * qty;
-                                      return {
-                                        ...l,
-                                        componentItemCode: code,
-                                        description: desc || String(item?.description ?? item?.name ?? ''),
-                                        ...(unitWt > 0 ? { weightPerQty: String(unitWt), totalWeight: totW > 0 ? String(totW) : l.totalWeight } : {})
-                                      };
-                                    }
                                     if (config.docType === 'production-bom' && (f.key === 'quantityPer' || f.key === 'weightPerQty')) {
                                       const qty = Number(f.key === 'quantityPer' ? val : l.quantityPer ?? 0);
                                       const w = Number(f.key === 'weightPerQty' ? val : l.weightPerQty ?? 0);

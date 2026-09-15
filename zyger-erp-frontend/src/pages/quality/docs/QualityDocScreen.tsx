@@ -123,7 +123,7 @@ export default function QualityDocScreen({ config, initialDocId, viewOnly = fals
         ? { [config.typeFilter.field]: defaultType }
         : {}
     );
-    setLines(config.lines?.seed ? config.lines.seed.map((s) => ({ ...s })) : []);
+    setLines(config.lines?.seed ? config.lines.seed.map((s) => ({ ...s })) : (config.lines ? [{}] : []));
     setMode('form');
   };
 
@@ -632,7 +632,7 @@ export default function QualityDocScreen({ config, initialDocId, viewOnly = fals
                 <thead>
                   <tr>
                     {config.lines.fields.map((f) => (
-                      <th key={f.key}>{f.label}</th>
+                      <th key={f.key} style={f.width ? { width: f.width, minWidth: f.width } : undefined}>{f.label}</th>
                     ))}
                   </tr>
                 </thead>
@@ -640,7 +640,7 @@ export default function QualityDocScreen({ config, initialDocId, viewOnly = fals
                   {lines.map((line, index) => (
                     <tr key={index}>
                       {config.lines!.fields.map((f) => (
-                        <td key={f.key}>
+                        <td key={f.key} style={f.width ? { width: f.width, minWidth: f.width } : undefined}>
                           {f.type === 'select' ? (
                             <select
                               className="in"
@@ -699,7 +699,7 @@ export default function QualityDocScreen({ config, initialDocId, viewOnly = fals
                 <thead>
                   <tr>
                     {config.lines.fields.map((f) => (
-                      <th key={f.key}>{f.label}</th>
+                      <th key={f.key} style={f.width ? { width: f.width, minWidth: f.width } : undefined}>{f.label}</th>
                     ))}
                   </tr>
                 </thead>
@@ -707,7 +707,7 @@ export default function QualityDocScreen({ config, initialDocId, viewOnly = fals
                   {(form.lines as Array<Record<string, unknown>>).map((line, index) => (
                     <tr key={index}>
                       {config.lines!.fields.map((f) => (
-                        <td key={f.key}>{line[f.key] == null ? '—' : String(line[f.key])}</td>
+                        <td key={f.key} style={f.width ? { width: f.width, minWidth: f.width } : undefined}>{line[f.key] == null ? '—' : String(line[f.key])}</td>
                       ))}
                     </tr>
                   ))}

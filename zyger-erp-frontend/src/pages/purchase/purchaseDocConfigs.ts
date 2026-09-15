@@ -35,6 +35,8 @@ export interface DocScreenConfig {
   statusField: string;
   statusOptions: string[];
   disableApprovalWorkflow?: boolean;
+  /** DRAFT -> Submit -> SUBMITTED only; no Approve/Reject/Reopen actions shown. */
+  submitOnly?: boolean;
   hideTopSave?: boolean;
   hideBottomSave?: boolean;
   typeFilter?: { field: string; label: string; options: string[] };
@@ -54,10 +56,9 @@ export const PURCHASE_REQUEST_CONFIG: DocScreenConfig = {
   docType: 'purchase-request',
   title: 'Purchase Request',
   subtitle: 'Internal departmental request for materials, consumables, tools or services',
-  // FRS DOC-PUR-FRS-02 §13 [ASSUMPTION]: workflow re-enabled per business decision to make
-  // Submit/Approve/Reject reachable from the UI (was disabled, making PURCHASE_MANAGER's
-  // Approve/Reject permission dead code for this screen).
+  // Submit-only workflow: DRAFT -> Submit -> SUBMITTED. No Approve/Reject/Reopen.
   disableApprovalWorkflow: false,
+  submitOnly: true,
   columns: [
     { label: 'PR Number', field: 'docNo' },
     { label: 'PR Date', field: 'date' },
@@ -89,8 +90,7 @@ export const PURCHASE_REQUEST_CONFIG: DocScreenConfig = {
       { colNo: 7, key: 'size', label: 'Size', width: '80px' },
       { colNo: 8, key: 'requiredQty', label: 'Quantity *', type: 'number', required: true, width: '85px' },
       { colNo: 9, key: 'uom', label: 'UOM', width: '95px' },
-      { colNo: 10, key: 'requiredDate', label: 'Required Date', type: 'date', width: '125px' },
-      { colNo: 11, key: 'remarks', label: 'Remarks', width: '120px' },
+      { colNo: 10, key: 'remarks', label: 'Remarks', width: '120px' },
     ],
   },
 };
@@ -132,14 +132,13 @@ export const SUPPLIER_ENQUIRY_CONFIG: DocScreenConfig = {
   lines: {
     title: 'Enquiry Items',
     fields: [
-      { colNo: 2, key: 'itemCode', label: 'Item Code / Name *', type: 'lookup', required: true },
-      { colNo: 3, key: 'itemName', label: 'Item Name *', required: true },
-      { colNo: 4, key: 'description', label: 'Description' },
-      { colNo: 5, key: 'specification', label: 'Specification' },
-      { colNo: 6, key: 'requiredQty', label: 'Quantity *', type: 'number', required: true },
-      { colNo: 7, key: 'uom', label: 'UOM' },
-      { colNo: 8, key: 'requiredDeliveryDate', label: 'Required Delivery Date', type: 'date' },
-      { colNo: 9, key: 'remarks', label: 'Remarks' },
+      { colNo: 2, key: 'itemCode', label: 'Item Code / Name *', type: 'lookup', required: true, width: '180px' },
+      { colNo: 3, key: 'itemName', label: 'Item Name *', required: true, width: '150px' },
+      { colNo: 4, key: 'description', label: 'Description', width: '140px' },
+      { colNo: 5, key: 'specification', label: 'Specification', width: '120px' },
+      { colNo: 6, key: 'requiredQty', label: 'Quantity *', type: 'number', required: true, width: '85px' },
+      { colNo: 7, key: 'uom', label: 'UOM', width: '90px' },
+      { colNo: 8, key: 'remarks', label: 'Remarks', width: '120px' },
     ],
   },
 };
@@ -171,6 +170,7 @@ export const SUPPLIER_QUOTATION_CONFIG: DocScreenConfig = {
     { key: 'date', label: 'Quotation Date', type: 'date', required: true },
     { key: 'supplier', label: 'Supplier Name', required: true },
     { key: 'validUntil', label: 'Valid Until Date', type: 'date' },
+    { key: 'expectedDeliveryDate', label: 'Expected Delivery Date', type: 'date' },
     { key: 'paymentTerms', label: 'Payment Terms' },
     { key: 'taxes', label: 'Taxes (₹)', type: 'number' },
     { key: 'otherCharges', label: 'Other Charges (₹)', type: 'number' },
@@ -179,21 +179,21 @@ export const SUPPLIER_QUOTATION_CONFIG: DocScreenConfig = {
   lines: {
     title: 'Quotation Items',
     fields: [
-      { colNo: 2, key: 'itemCode', label: 'Item Code (Lookup)', type: 'lookup', required: true },
-      { colNo: 3, key: 'itemName', label: 'Item Name' },
-      { colNo: 4, key: 'description', label: 'Description' },
-      { colNo: 5, key: 'specification', label: 'Specification' },
-      { colNo: 6, key: 'requiredQty', label: 'Quoted Qty *', type: 'number', required: true },
-      { colNo: 7, key: 'uom', label: 'UOM' },
-      { colNo: 8, key: 'unitPrice', label: 'Unit Price (₹) *', type: 'number', required: true },
-      { colNo: 9, key: 'discount', label: 'Discount (%)', type: 'number' },
-      { colNo: 10, key: 'tax', label: 'Tax (%)', type: 'number' },
-      { colNo: 11, key: 'taxAmount', label: 'Tax Amount (₹)', type: 'number', readOnly: true },
-      { colNo: 12, key: 'netPrice', label: 'Net Amount (₹)', type: 'number', readOnly: true },
-      { colNo: 13, key: 'deliveryLeadTime', label: 'Lead Time (Days)', type: 'number' },
-      { colNo: 14, key: 'minimumOrderQty', label: 'Min Order Qty', type: 'number' },
-      { colNo: 15, key: 'manufacturerBrand', label: 'Manufacturer / Brand' },
-      { colNo: 16, key: 'remarks', label: 'Remarks' },
+      { colNo: 2, key: 'itemCode', label: 'Item Code (Lookup)', type: 'lookup', required: true, width: '170px' },
+      { colNo: 3, key: 'itemName', label: 'Item Name', width: '140px' },
+      { colNo: 4, key: 'description', label: 'Description', width: '130px' },
+      { colNo: 5, key: 'specification', label: 'Specification', width: '110px' },
+      { colNo: 6, key: 'requiredQty', label: 'Quoted Qty *', type: 'number', required: true, width: '85px' },
+      { colNo: 7, key: 'uom', label: 'UOM', width: '90px' },
+      { colNo: 8, key: 'unitPrice', label: 'Unit Price (₹) *', type: 'number', required: true, width: '100px' },
+      { colNo: 9, key: 'discount', label: 'Discount (%)', type: 'number', width: '85px' },
+      { colNo: 10, key: 'tax', label: 'Tax (%)', type: 'number', width: '80px' },
+      { colNo: 11, key: 'taxAmount', label: 'Tax Amount (₹)', type: 'number', readOnly: true, width: '100px' },
+      { colNo: 12, key: 'netPrice', label: 'Net Amount (₹)', type: 'number', readOnly: true, width: '100px' },
+      { colNo: 13, key: 'deliveryLeadTime', label: 'Lead Time (Days)', type: 'number', width: '95px' },
+      { colNo: 14, key: 'minimumOrderQty', label: 'Min Order Qty', type: 'number', width: '95px' },
+      { colNo: 15, key: 'manufacturerBrand', label: 'Manufacturer / Brand', width: '130px' },
+      { colNo: 16, key: 'remarks', label: 'Remarks', width: '110px' },
     ],
   },
 };
@@ -238,20 +238,20 @@ export const PURCHASE_ORDER_CONFIG: DocScreenConfig = {
   lines: {
     title: 'Purchase Order Items',
     fields: [
-      { colNo: 2, key: 'itemCode', label: 'Item Code (Lookup)', type: 'lookup', required: true },
-      { colNo: 3, key: 'itemName', label: 'Item Name' },
-      { colNo: 4, key: 'specification', label: 'Specification' },
-      { colNo: 5, key: 'materialGrade', label: 'Material Grade' },
-      { colNo: 6, key: 'size', label: 'Size' },
-      { colNo: 7, key: 'orderQty', label: 'Order Qty *', type: 'number', required: true },
-      { colNo: 8, key: 'uom', label: 'UOM' },
-      { colNo: 9, key: 'unitPrice', label: 'Unit Price (₹) *', type: 'number', required: true },
-      { colNo: 10, key: 'discount', label: 'Discount (%)', type: 'number' },
-      { colNo: 11, key: 'tax', label: 'Tax (%)', type: 'number' },
-      { colNo: 12, key: 'taxAmount', label: 'Tax Amount (₹)', type: 'number', readOnly: true },
-      { colNo: 13, key: 'netAmount', label: 'Net Amount (₹)', type: 'number', readOnly: true },
-      { colNo: 14, key: 'requiredDate', label: 'Required Date *', type: 'date', required: true },
-      { colNo: 15, key: 'remarks', label: 'Remarks' },
+      { colNo: 2, key: 'itemCode', label: 'Item Code (Lookup)', type: 'lookup', required: true, width: '170px' },
+      { colNo: 3, key: 'itemName', label: 'Item Name', width: '140px' },
+      { colNo: 4, key: 'specification', label: 'Specification', width: '110px' },
+      { colNo: 5, key: 'materialGrade', label: 'Material Grade', width: '100px' },
+      { colNo: 6, key: 'size', label: 'Size', width: '80px' },
+      { colNo: 7, key: 'orderQty', label: 'Order Qty *', type: 'number', required: true, width: '85px' },
+      { colNo: 8, key: 'uom', label: 'UOM', width: '90px' },
+      { colNo: 9, key: 'unitPrice', label: 'Unit Price (₹) *', type: 'number', required: true, width: '100px' },
+      { colNo: 10, key: 'discount', label: 'Discount (%)', type: 'number', width: '85px' },
+      { colNo: 11, key: 'tax', label: 'Tax (%)', type: 'number', width: '80px' },
+      { colNo: 12, key: 'taxAmount', label: 'Tax Amount (₹)', type: 'number', readOnly: true, width: '100px' },
+      { colNo: 13, key: 'netAmount', label: 'Net Amount (₹)', type: 'number', readOnly: true, width: '100px' },
+      { colNo: 14, key: 'requiredDate', label: 'Required Date *', type: 'date', required: true, width: '130px' },
+      { colNo: 15, key: 'remarks', label: 'Remarks', width: '110px' },
     ],
   },
 };
@@ -294,20 +294,20 @@ export const JOB_ORDER_CONFIG: DocScreenConfig = {
   lines: {
     title: 'Job Order Line Items',
     fields: [
-      { colNo: 2, key: 'itemCode', label: 'Item Code (Lookup)', type: 'lookup', required: true },
-      { colNo: 3, key: 'itemName', label: 'Item Name' },
-      { colNo: 4, key: 'description', label: 'Description' },
-      { colNo: 5, key: 'orderQty', label: 'Qty to Send *', type: 'number', required: true },
-      { colNo: 6, key: 'uom', label: 'UOM' },
-      { colNo: 7, key: 'batchLotNumber', label: 'Batch / Lot #' },
-      { colNo: 8, key: 'heatNumber', label: 'Heat #' },
-      { colNo: 9, key: 'serialNumber', label: 'Serial #' },
-      { colNo: 10, key: 'drawingNumber', label: 'Drawing No' },
-      { colNo: 11, key: 'drawingRevision', label: 'Drawing Rev' },
-      { colNo: 12, key: 'processSpecification', label: 'Process Spec' },
-      { colNo: 13, key: 'qualityRequirement', label: 'Quality Req' },
-      { colNo: 14, key: 'certificateRequirement', label: 'Certificate Req' },
-      { colNo: 15, key: 'remarks', label: 'Remarks' },
+      { colNo: 2, key: 'itemCode', label: 'Item Code (Lookup)', type: 'lookup', required: true, width: '170px' },
+      { colNo: 3, key: 'itemName', label: 'Item Name', width: '140px' },
+      { colNo: 4, key: 'description', label: 'Description', width: '130px' },
+      { colNo: 5, key: 'orderQty', label: 'Qty to Send *', type: 'number', required: true, width: '90px' },
+      { colNo: 6, key: 'uom', label: 'UOM', width: '90px' },
+      { colNo: 7, key: 'batchLotNumber', label: 'Batch / Lot #', width: '100px' },
+      { colNo: 8, key: 'heatNumber', label: 'Heat #', width: '85px' },
+      { colNo: 9, key: 'serialNumber', label: 'Serial #', width: '90px' },
+      { colNo: 10, key: 'drawingNumber', label: 'Drawing No', width: '100px' },
+      { colNo: 11, key: 'drawingRevision', label: 'Drawing Rev', width: '95px' },
+      { colNo: 12, key: 'processSpecification', label: 'Process Spec', width: '120px' },
+      { colNo: 13, key: 'qualityRequirement', label: 'Quality Req', width: '110px' },
+      { colNo: 14, key: 'certificateRequirement', label: 'Certificate Req', width: '120px' },
+      { colNo: 15, key: 'remarks', label: 'Remarks', width: '110px' },
     ],
   },
 };

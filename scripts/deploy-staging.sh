@@ -67,6 +67,10 @@ fi
 
 # ---------- 4. Build & start the stack (NEVER -v) ----------
 echo -e "${GREEN}Building and starting staging stack...${NC}"
+# BuildKit enables the cache mounts in the Dockerfiles (npm/gradle caches),
+# which is what makes redeploys fast instead of re-fetching every dependency.
+export DOCKER_BUILDKIT=1
+export COMPOSE_DOCKER_CLI_BUILD=1
 docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up -d --build
 
 # ---------- 5. Wait for PostgreSQL ----------

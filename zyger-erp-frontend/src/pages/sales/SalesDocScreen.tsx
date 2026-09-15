@@ -16,12 +16,14 @@ import { useToast } from '../../contexts/ToastContext';
 import StatusBadge from '../../components/common/StatusBadge';
 import ConfirmActionModal from '../../components/common/ConfirmActionModal';
 import AuditHistoryDrawer from '../../components/common/AuditHistoryDrawer';
+import SearchableItemLookup from '../../components/common/SearchableItemLookup';
 import { auditEntityTypeFor } from '../../utils/auditEntity';
 import axiosClient from '../../api/axiosClient';
 import { salesApi } from '../../services/sales-api';
 import { lookupDocumentByNumber } from '../../utils/documentLookup';
 import { logSystemActivity } from '../../utils/activityLog';
 import { exportToCsv } from '../../utils/csvExport';
+import { filterPurchaseRelevantItems } from '../../utils/itemClassification';
 
 const PAGE_SIZE = 10;
 
@@ -96,10 +98,14 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
       ]);
     });
 
-    // Load master items (inventory items for sale)
+    // Load master items (inventory items for sale) — restrict to the item
+    // types maintained under Master > Inventory > Items (Purchasable,
+    // Customer Supplied, Manufacturing) so the line-item lookup only offers
+    // items that actually exist in one of those three masters.
     axiosClient.get('/master/items?size=500').then((res) => {
       const data = res.data?.content || res.data || [];
-      const items = (Array.isArray(data) ? data : []).map((it: any) => ({
+      const filtered = filterPurchaseRelevantItems(Array.isArray(data) ? data : []);
+      const items = filtered.map((it: any) => ({
         id: it.id,
         code: it.code,
         name: it.description || it.name || '',
@@ -417,7 +423,7 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
       shippingAddress: 'Plot 45, GIDC Industrial Estate, Rajkot, Gujarat',
       ...(config.typeFilter && defaultType ? { [config.typeFilter.field]: defaultType } : {})
     });
-    setLines([]);
+    setLines([{ lineNo: 1, itemCode: '', description: '', qty: 0, uom: 'NOS', unitPrice: 0, discount: 0, taxCode: 'GST 18%', taxAmount: 0, netAmount: 0, lineStatus: 'Open' }]);
     setMode('form');
   };
 
@@ -759,11 +765,16 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
       const row = { ...next[index], [fieldKey]: value };
 
       if (fieldKey === 'itemCode') {
+        // Item Name and Description come from the same master field, so filling
+        // both with it just duplicates the same text across two columns. Item
+        // Name is the auto-filled one; Description stays free-text for the user.
         const item = itemMasters.find(i => i.code === value);
         if (item) {
-          row.description = item.description || item.name || '';
+          row.itemName = item.name || item.description || item.code;
           row.uom = item.uom || 'PCS';
           if (item.price) row.unitPrice = item.price;
+        } else {
+          row.itemName = '';
         }
       }
 
@@ -1360,7 +1371,7 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
                 <thead>
                   <tr>
                     {config.lines.fields.map((f) => (
-                      <th key={f.key}>{f.label}</th>
+                      <th key={f.key} style={f.width ? { width: f.width, minWidth: f.width } : undefined}>{f.label}</th>
                     ))}
                     {editable && <th style={{ textAlign: 'right' }}>Remove</th>}
                   </tr>
@@ -1370,25 +1381,18 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
                     <tr key={idx}>
                       {config.lines!.fields.map((f) => {
                         const cellVal = line[f.key] ?? '';
+                        const colStyle = f.width ? { width: f.width, minWidth: f.width } : undefined;
 
-                        // Column 2 Master Item Lookup Select
+                        // Column 2 Master Item Lookup: type-to-search
                         if (f.colNo === 2 || f.type === 'lookup') {
                           return (
-                            <td key={f.key} className="w-i">
-                              <select
-                                disabled={!editable}
+                            <td key={f.key} className={f.width ? undefined : "w-i"} style={colStyle}>
+                              <SearchableItemLookup
                                 value={String(cellVal)}
-                                onChange={(e) => handleLineItemChange(idx, f.key, e.target.value)}
-                                className="in"
-                                style={{ fontWeight: 700, color: '#1e3a8a' }}
-                              >
-                                <option value="">-- Select Item --</option>
-                                {itemMasters.filter(it => it.active !== false).map((item) => (
-                                  <option key={item.id} value={item.code}>
-                                    {item.code} - {item.description || item.name}
-                                  </option>
-                                ))}
-                              </select>
+                                disabled={!editable}
+                                items={itemMasters.filter(it => it.active !== false)}
+                                onChange={(val) => handleLineItemChange(idx, f.key, val)}
+                              />
                             </td>
                           );
                         }
@@ -1396,12 +1400,13 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
                         // UOM Master Lookup Select
                         if (f.key === 'uom') {
                           return (
-                            <td key={f.key}>
+                            <td key={f.key} style={colStyle}>
                               <select
                                 disabled={!editable}
                                 value={String(cellVal)}
                                 onChange={(e) => handleLineItemChange(idx, f.key, e.target.value)}
                                 className="in"
+                                style={{ width: '100%' }}
                               >
                                 <option value="">-- UOM --</option>
                                 {uomMasters.map((u) => (
@@ -1416,12 +1421,13 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
 
                         if (f.type === 'select') {
                           return (
-                            <td key={f.key}>
+                            <td key={f.key} style={colStyle}>
                               <select
                                 disabled={!editable || f.readOnly}
                                 value={String(cellVal)}
                                 onChange={(e) => handleLineItemChange(idx, f.key, e.target.value)}
                                 className="in"
+                                style={{ width: '100%' }}
                               >
                                 {(f.options || []).map((o) => (
                                   <option key={o} value={o}>{o}</option>
@@ -1432,13 +1438,14 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
                         }
 
                         return (
-                          <td key={f.key}>
+                          <td key={f.key} style={colStyle}>
                             <input
                               type={f.type === 'number' ? 'number' : f.type === 'date' ? 'date' : 'text'}
                               disabled={!editable || f.readOnly}
                               value={String(cellVal)}
                               onChange={(e) => handleLineItemChange(idx, f.key, e.target.value)}
                               className="in"
+                              style={{ width: '100%' }}
                             />
                           </td>
                         );

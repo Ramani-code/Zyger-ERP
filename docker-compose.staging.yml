@@ -73,6 +73,9 @@ services:
       - zyger_uploads:/app/uploads
     expose:
       - "9090"
+    # Bounds the container so -XX:MaxRAMPercentage in the JVM entrypoint has
+    # a real limit to scale against (otherwise it sees the whole host).
+    mem_limit: 768m
     networks:
       - staging-net
 

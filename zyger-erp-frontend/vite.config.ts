@@ -45,14 +45,18 @@ export default defineConfig({
             options: { cacheName: 'api-v1-cache', networkTimeoutSeconds: 10, expiration: { maxEntries: 200, maxAgeSeconds: 3600 } }
           },
           {
+            // NetworkFirst (not StaleWhileRevalidate): master-data screens
+            // (items, item groups, etc.) need to show a just-saved record
+            // immediately, not a cached copy from up to 24h ago. Falls back
+            // to cache only if the network is actually unavailable.
             urlPattern: /^\/api\/master\/.*/i,
-            handler: 'StaleWhileRevalidate',
-            options: { cacheName: 'master-data', expiration: { maxEntries: 50, maxAgeSeconds: 86400 } }
+            handler: 'NetworkFirst',
+            options: { cacheName: 'master-data', networkTimeoutSeconds: 8, expiration: { maxEntries: 50, maxAgeSeconds: 3600 } }
           },
           {
             urlPattern: /^\/api\/v1\/master\/.*/i,
-            handler: 'StaleWhileRevalidate',
-            options: { cacheName: 'v2-master-data', expiration: { maxEntries: 100, maxAgeSeconds: 86400 } }
+            handler: 'NetworkFirst',
+            options: { cacheName: 'v2-master-data', networkTimeoutSeconds: 8, expiration: { maxEntries: 100, maxAgeSeconds: 3600 } }
           }
         ]
       }

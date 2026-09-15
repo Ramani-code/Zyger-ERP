@@ -7,6 +7,7 @@ import ConfirmActionModal from '../../../components/common/ConfirmActionModal';
 import StatusBadge from '../../../components/common/StatusBadge';
 import { printDocument as printDoc } from '../../../utils/printDocument';
 import { exportToCsv } from '../../../utils/csvExport';
+import { filterPurchaseRelevantItems } from '../../../utils/itemClassification';
 import { useTabs } from '../../../contexts/TabsContext';
 
 interface ProductConversion {
@@ -61,7 +62,7 @@ export default function ProductConversionScreen() {
   const fetchItems = useCallback(async () => {
     try {
       const { data } = await apiClient.get('/master/items', { params: { size: 500, active: true, sort: 'code,asc' } });
-      setItems((data?.content ?? data ?? []).filter((i: any) => i.active !== false));
+      setItems(filterPurchaseRelevantItems((data?.content ?? data ?? []).filter((i: any) => i.active !== false)));
     } catch { /* ignore */ }
   }, []);
 

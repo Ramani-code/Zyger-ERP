@@ -17,6 +17,7 @@ import { filterPurchaseRelevantItems } from '../../../../utils/itemClassificatio
 
 import StatusBadge from '../../../../components/common/StatusBadge';
 import ConfirmActionModal from '../../../../components/common/ConfirmActionModal';
+import SearchableItemLookup from '../../../../components/common/SearchableItemLookup';
 import { AMENDMENT_REASON_OPTIONS } from '../../../../config/adjustmentConfig';
 import {
   buildPayload,
@@ -448,21 +449,12 @@ export default function StockAmendmentForm({
               <span>
                 Item <em>*</em>
               </span>
-              <select
-                className="in"
+              <SearchableItemLookup
                 value={form.itemCode}
                 disabled={!editable}
-                onChange={(event) =>
-                  updateField('itemCode', event.target.value)
-                }
-              >
-                <option value="">— Select Item —</option>
-                {allowedItems.map((item) => (
-                  <option key={item.code} value={item.code}>
-                    {item.code} — {item.description}
-                  </option>
-                ))}
-              </select>
+                items={allowedItems}
+                onChange={(val) => updateField('itemCode', val)}
+              />
             </label>
 
             <label className="fld">

@@ -22,6 +22,7 @@ import { filterPurchaseRelevantItems } from '../../../utils/itemClassification';
 import StatusBadge from '../../../components/common/StatusBadge';
 import ConfirmActionModal from '../../../components/common/ConfirmActionModal';
 import AttachmentsDrawer from '../../../components/common/AttachmentsDrawer';
+import SearchableItemLookup from '../../../components/common/SearchableItemLookup';
 
 interface InwardFormProps {
   inwardType?: InwardType;
@@ -917,24 +918,14 @@ export default function InwardForm({
       const allowedItems = filterPurchaseRelevantItems(options.items);
 
       return (
-        <>
-          <input
-            className="in"
-            style={{ minWidth: '130px', padding: '5px 6px', fontSize: '.74rem', width: '100%' }}
-            list={`item-code-datalist-${index}`}
-            placeholder="Search Item..."
-            value={value}
-            disabled={!editable}
-            onChange={(e) => updateLine(index, field.key, e.target.value)}
-          />
-          <datalist id={`item-code-datalist-${index}`}>
-            {allowedItems.map((item) => (
-              <option key={item.code} value={item.code}>
-                {item.code} — {item.description}
-              </option>
-            ))}
-          </datalist>
-        </>
+        <SearchableItemLookup
+          value={value}
+          disabled={!editable}
+          items={allowedItems}
+          onChange={(val) => updateLine(index, field.key, val)}
+          placeholder="Search Item..."
+          allowOthers
+        />
       );
     }
 

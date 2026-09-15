@@ -13,6 +13,7 @@ export interface LineFieldDef {
   type?: 'text' | 'number' | 'date' | 'select';
   options?: string[];
   readonly?: boolean;
+  width?: string;
 }
 
 export interface ColumnDef {
@@ -192,13 +193,13 @@ export const CONCESSION_CONFIG: DocScreenConfig = {
 };
 
 const TC_LINE_FIELDS: LineFieldDef[] = [
-  { key: 'parameterName', label: 'Parameter *' },
-  { key: 'specification', label: 'Specification' },
-  { key: 'nominalValue', label: 'Nominal' },
-  { key: 'resultValue', label: 'Result Value' },
-  { key: 'uom', label: 'UOM' },
-  { key: 'instrumentCode', label: 'Instrument' },
-  { key: 'result', label: 'Result', type: 'select', options: ['PASS', 'FAIL', 'NA'] },
+  { key: 'parameterName', label: 'Parameter *', width: '160px' },
+  { key: 'specification', label: 'Specification', width: '130px' },
+  { key: 'nominalValue', label: 'Nominal', width: '100px' },
+  { key: 'resultValue', label: 'Result Value', width: '110px' },
+  { key: 'uom', label: 'UOM', width: '90px' },
+  { key: 'instrumentCode', label: 'Instrument', width: '120px' },
+  { key: 'result', label: 'Result', type: 'select', options: ['PASS', 'FAIL', 'NA'], width: '100px' },
 ];
 
 export const TEST_CERTIFICATE_CONFIG: DocScreenConfig = {
@@ -404,13 +405,13 @@ export const EIGHT_D_CONFIG: DocScreenConfig = {
   lines: {
     title: 'Disciplines (D1 – D8)',
     fields: [
-      { key: 'disciplineCode', label: 'Code', readonly: true },
-      { key: 'disciplineName', label: 'Discipline', readonly: true },
-      { key: 'description', label: 'Description' },
-      { key: 'responsiblePerson', label: 'Responsible' },
-      { key: 'dueDate', label: 'Due', type: 'date' },
-      { key: 'completionDate', label: 'Completed', type: 'date' },
-      { key: 'status', label: 'Status', type: 'select', options: ['PENDING', 'IN_PROGRESS', 'COMPLETED', 'VERIFIED'] },
+      { key: 'disciplineCode', label: 'Code', readonly: true, width: '70px' },
+      { key: 'disciplineName', label: 'Discipline', readonly: true, width: '190px' },
+      { key: 'description', label: 'Description', width: '180px' },
+      { key: 'responsiblePerson', label: 'Responsible', width: '120px' },
+      { key: 'dueDate', label: 'Due', type: 'date', width: '130px' },
+      { key: 'completionDate', label: 'Completed', type: 'date', width: '130px' },
+      { key: 'status', label: 'Status', type: 'select', options: ['PENDING', 'IN_PROGRESS', 'COMPLETED', 'VERIFIED'], width: '130px' },
     ],
     seed: [
       { disciplineCode: 'D1', disciplineName: 'Team Formation' },

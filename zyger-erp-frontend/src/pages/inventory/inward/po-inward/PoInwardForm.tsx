@@ -10,6 +10,7 @@ import { toNumber } from '../../../../utils/format';
 import { logSystemActivity } from '../../../../utils/activityLog';
 import StatusBadge from '../../../../components/common/StatusBadge';
 import ConfirmActionModal from '../../../../components/common/ConfirmActionModal';
+import SearchableItemLookup from '../../../../components/common/SearchableItemLookup';
 import type { PoInwardDto, DocumentAction } from '../../../../types/inventory/poInward.types';
 import type { ItemMasterDto } from '../../../../types/master.types';
 import { lookupDocumentByNumber } from '../../../../utils/documentLookup';
@@ -919,24 +920,13 @@ export default function PoInwardForm({
                     <tr key={index}>
                       <td className="num mut">{index + 1}</td>
                       <td className="w-i">
-                        <input
-                          className="in"
-                          style={{ minWidth: '130px', padding: '5px 6px', fontSize: '.74rem', width: '100%' }}
-                          list={`po-item-code-datalist-${index}`}
-                          placeholder="Search Item..."
+                        <SearchableItemLookup
                           value={line.itemCode}
                           disabled={!editable}
-                          onChange={(event) =>
-                            updateLine(index, 'itemCode', event.target.value)
-                          }
+                          items={allowedItems}
+                          onChange={(val) => updateLine(index, 'itemCode', val)}
+                          placeholder="Search Item..."
                         />
-                        <datalist id={`po-item-code-datalist-${index}`}>
-                          {allowedItems.map((item: any) => (
-                            <option key={item.code} value={item.code}>
-                              {item.code} — {item.description}
-                            </option>
-                          ))}
-                        </datalist>
                       </td>
 
                     <td className="w-i">

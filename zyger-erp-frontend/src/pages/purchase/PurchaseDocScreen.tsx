@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useAuth } from '../../contexts/AuthContext';
+import { useFormValidation } from '../../hooks/useFormValidation';
+import SearchableItemLookup from '../../components/common/SearchableItemLookup';
 import {
   usePurchaseDoc,
   usePurchaseDocAction,
@@ -26,6 +28,7 @@ import { purchaseApi } from '../../services/purchase-api';
 import { lookupDocumentByNumber } from '../../utils/documentLookup';
 import { logSystemActivity } from '../../utils/activityLog';
 import { exportToCsv } from '../../utils/csvExport';
+import { filterPurchaseRelevantItems } from '../../utils/itemClassification';
 
 const PAGE_SIZE = 10;
 
@@ -44,171 +47,6 @@ export interface PurchaseDocScreenProps {
 }
 
 type ActionModal = { action: 'submit' | 'approve' | 'reject' | 'reopen' | 'cancel'; danger: boolean };
-
-function SearchableItemLookup({
-  value,
-  onChange,
-  disabled,
-  items,
-  allowOthers = false,
-}: {
-  value: string;
-  onChange: (val: string) => void;
-  disabled?: boolean;
-  items: Array<{ id: number; code: string; name: string; description?: string }>;
-  allowOthers?: boolean;
-}) {
-  const [isOpen, setIsOpen] = useState(false);
-  const [search, setSearch] = useState(value || '');
-  const [coords, setCoords] = useState<{ top: number; left: number; width: number } | null>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  const updateCoords = () => {
-    if (inputRef.current) {
-      const rect = inputRef.current.getBoundingClientRect();
-      setCoords({
-        top: rect.bottom + 2,
-        left: rect.left,
-        width: Math.max(rect.width, 240),
-      });
-    }
-  };
-
-  useEffect(() => {
-    setSearch(value || '');
-  }, [value]);
-
-  useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
-      }
-    }
-    function handleScrollOrResize() {
-      if (isOpen) updateCoords();
-    }
-    document.addEventListener('mousedown', handleClickOutside);
-    window.addEventListener('scroll', handleScrollOrResize, true);
-    window.addEventListener('resize', handleScrollOrResize);
-    return () => {
-      document.removeEventListener('mousedown', handleClickOutside);
-      window.removeEventListener('scroll', handleScrollOrResize, true);
-      window.removeEventListener('resize', handleScrollOrResize);
-    };
-  }, [isOpen]);
-
-  const handleFocus = () => {
-    updateCoords();
-    setIsOpen(true);
-  };
-
-  const filteredItems = items.filter((item) => {
-    const q = search.toLowerCase().trim();
-    if (!q) return true;
-    return (
-      item.code.toLowerCase().includes(q) ||
-      (item.name && item.name.toLowerCase().includes(q)) ||
-      (item.description && item.description.toLowerCase().includes(q))
-    );
-  });
-
-  return (
-    <div ref={containerRef} style={{ position: 'relative', width: '100%' }}>
-      <input
-        ref={inputRef}
-        type="text"
-        disabled={disabled}
-        value={search}
-        onFocus={handleFocus}
-        onChange={(e) => {
-          setSearch(e.target.value);
-          onChange(e.target.value);
-          updateCoords();
-          setIsOpen(true);
-        }}
-        className="in"
-        placeholder="Type Item Code..."
-        style={{ fontWeight: 700, color: '#1e3a8a', width: '100%', boxSizing: 'border-box' }}
-      />
-      {isOpen && !disabled && coords && createPortal(
-        <div
-          style={{
-            position: 'fixed',
-            top: `${coords.top}px`,
-            left: `${coords.left}px`,
-            width: `${coords.width}px`,
-            zIndex: 999999,
-            maxHeight: '200px',
-            overflowY: 'auto',
-            backgroundColor: '#ffffff',
-            border: '1px solid #94a3b8',
-            borderRadius: '6px',
-            boxShadow: '0 10px 30px -5px rgba(0, 0, 0, 0.25), 0 8px 10px -6px rgba(0, 0, 0, 0.1)',
-            boxSizing: 'border-box',
-          }}
-        >
-          {filteredItems.length === 0 ? (
-            <div style={{ padding: '8px 12px', fontSize: '12px', color: '#94a3b8', textAlign: 'left' }}>
-              No matching items
-            </div>
-          ) : (
-            filteredItems.map((item) => (
-              <div
-                key={item.id || item.code}
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  setSearch(item.code);
-                  onChange(item.code);
-                  setIsOpen(false);
-                }}
-                style={{
-                  padding: '8px 10px',
-                  cursor: 'pointer',
-                  borderBottom: '1px solid #f1f5f9',
-                  display: 'flex',
-                  flexDirection: 'column',
-                  gap: '2px',
-                  textAlign: 'left',
-                }}
-              >
-                <span style={{ fontWeight: 700, fontSize: '12px', color: '#1e293b' }}>
-                  {item.code}
-                </span>
-                <span style={{ fontSize: '11px', color: '#64748b', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {item.name || item.description}
-                </span>
-              </div>
-            ))
-          )}
-          {allowOthers && (
-            <div
-              onMouseDown={(e) => {
-                e.preventDefault();
-                setSearch('OTHERS');
-                onChange('OTHERS');
-                setIsOpen(false);
-              }}
-              style={{
-                padding: '8px 10px',
-                cursor: 'pointer',
-                fontWeight: 700,
-                fontSize: '11px',
-                color: '#2563eb',
-                backgroundColor: '#f8fafc',
-                borderTop: '1px solid #e2e8f0',
-                textAlign: 'left',
-              }}
-            >
-              + OTHERS (Custom Item)
-            </div>
-          )}
-        </div>,
-        document.body
-      )}
-    </div>
-  );
-}
 
 function SearchableDocLookup({
   value,
@@ -358,6 +196,7 @@ function SearchableDocLookup({
 export default function PurchaseDocScreen({ config, initialDocId, viewOnly = false, defaultType, prefill }: PurchaseDocScreenProps) {
   const { toast } = useToast();
   const { user, can } = useAuth();
+  const { validate: validateFields, hasError: isFieldError } = useFormValidation();
   const { docType } = config;
 
   const [mode, setMode] = useState<'list' | 'form'>(initialDocId ? 'form' : 'list');
@@ -468,17 +307,9 @@ export default function PurchaseDocScreen({ config, initialDocId, viewOnly = fal
     axiosClient.get('/master/items?size=500').then((res) => {
       const data = res.data?.content || res.data || [];
       if (Array.isArray(data) && data.length > 0) {
-        const filtered = data.filter((i: any) => {
-          const t = (i.itemType || '').toUpperCase().replace(/[\s_]+/g, '_');
-          const code = (i.code || '').toUpperCase();
-          const cat = (i.category || '').toUpperCase();
-          const isPurchasable = t === 'PURCHASABLE' || t === 'RAW_MATERIAL' || t === 'BUY_ITEM' || code.startsWith('PIT-') || cat.includes('PURCHAS');
-          const isCustomerSupplied = t === 'CUSTOMER_SUPPLIED' || i.customerOwned === true || code.startsWith('CSM-') || cat.includes('CUSTOMER');
-          const isManufacturing = t === 'FG' || t === 'SEMI_FG' || t === 'SFG' || t === 'MANUFACTURING' || code.startsWith('MFG-') || cat.includes('MANUFACTUR');
-          return isPurchasable || isCustomerSupplied || isManufacturing;
-        });
+        const filtered = filterPurchaseRelevantItems(data);
 
-        setItemMasters((filtered.length > 0 ? filtered : data).map((i: any) => ({
+        setItemMasters(filtered.map((i: any) => ({
           id: i.id,
           code: i.code || '',
           name: i.name || i.description || i.code || '',
@@ -869,9 +700,9 @@ export default function PurchaseDocScreen({ config, initialDocId, viewOnly = fal
       contactPerson: '',
       phone: '',
       email: '',
-      buyer: '',
-      requestingDepartment: 'Production',
-      requestBy: '',
+      buyer: user?.username || '',
+      requestingDepartment: '',
+      requestBy: user?.username || '',
       requiredDate: dateToday,
       closingDate: dateToday,
       quotationValidityDate: dateToday,
@@ -881,6 +712,7 @@ export default function PurchaseDocScreen({ config, initialDocId, viewOnly = fal
       endDate: dateToday,
       paymentTerms: '30 Days',
       deliveryTerms: 'EXW - Ex Works',
+      priority: 'Low',
       billingAddress: getCompanyAddress(false),
       shippingAddress: getCompanyAddress(true),
       requestType: 'Material',
@@ -1324,8 +1156,34 @@ export default function PurchaseDocScreen({ config, initialDocId, viewOnly = fal
     return payload;
   };
 
+  // Every field/line-column marked with an asterisk (`required: true` in the
+  // config) must actually be filled in before a save/submit is allowed — the
+  // asterisk was previously only cosmetic text in the label.
+  const validate = (): boolean => {
+    const errs = validateFields(config.fields, form);
+    if (errs.length > 0) { toast(errs[0].message, 'error'); return false; }
+    if (config.lines) {
+      const requiredLineFields = config.lines.fields.filter((f) => f.required);
+      if (requiredLineFields.length > 0) {
+        if (lines.length === 0) { toast('At least one line item is required.', 'error'); return false; }
+        for (let i = 0; i < lines.length; i++) {
+          for (const f of requiredLineFields) {
+            const v = lines[i][f.key];
+            const str = v == null ? '' : String(v).trim();
+            if (!str) {
+              toast(`Line ${i + 1}: ${f.label.replace(' *', '')} is required.`, 'error');
+              return false;
+            }
+          }
+        }
+      }
+    }
+    return true;
+  };
+
   const handleSave = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+    if (!validate()) return;
     try {
       const payload = buildPayload();
       let savedRes: any;
@@ -1351,6 +1209,34 @@ export default function PurchaseDocScreen({ config, initialDocId, viewOnly = fal
       });
     } catch (err: any) {
       toast(getApiErrorMessage(err, 'Failed to save purchase document'), 'error');
+    }
+  };
+
+  // submitOnly doc types (e.g. Purchase Request) skip the separate "Save as
+  // Draft" step entirely — a brand-new document is created and immediately
+  // transitioned to SUBMITTED in one action, since there's no Approve/Reject
+  // stage for a draft to wait in.
+  const handleCreateAndSubmit = async () => {
+    if (!validate()) return;
+    try {
+      const payload = buildPayload();
+      const savedRes: any = await createMutation.mutateAsync(payload);
+      const newId = savedRes && (savedRes.id ?? savedRes.docNo);
+      if (newId) {
+        await actionMutation.mutateAsync({ id: String(newId), action: 'submit' });
+      }
+      toast(`${config.title} submitted successfully!`, 'success');
+      logSystemActivity({
+        module: 'Purchase',
+        activity: `${config.title} (${savedRes?.docNo || form.docNo || 'Document'})`,
+        refNo: savedRes?.docNo || form.docNo || '',
+        party: String(form.supplier || form.party || 'Supplier'),
+        user: user?.username || 'Unknown',
+        status: 'SUBMITTED',
+      });
+      backToList();
+    } catch (err: any) {
+      toast(getApiErrorMessage(err, 'Failed to submit purchase document'), 'error');
     }
   };
 
@@ -1671,7 +1557,7 @@ export default function PurchaseDocScreen({ config, initialDocId, viewOnly = fal
               Audit
             </button>
           )}
-          {editable && !config.hideTopSave && (
+          {editable && !config.hideTopSave && !(config.submitOnly && !documentId) && (
             <button
               onClick={() => handleSave()}
               disabled={isBusy}
@@ -1681,16 +1567,26 @@ export default function PurchaseDocScreen({ config, initialDocId, viewOnly = fal
               {isBusy ? 'Saving...' : 'Save Document'}
             </button>
           )}
+          {config.submitOnly && !documentId && (
+            <button
+              onClick={() => handleCreateAndSubmit()}
+              disabled={isBusy}
+              className="btn btn-g"
+            >
+              <span className="material-symbols-rounded">send</span>
+              {isBusy ? 'Submitting...' : 'Submit'}
+            </button>
+          )}
           {!config.disableApprovalWorkflow && documentId && (String(form.status) === 'DRAFT' || String(form.status) === 'REJECTED') && (
             <button
-              onClick={() => setActionModal({ action: 'submit', danger: false })}
+              onClick={() => { if (validate()) setActionModal({ action: 'submit', danger: false }); }}
               className="btn btn-g"
             >
               <span className="material-symbols-rounded">send</span>
               Submit
             </button>
           )}
-          {!config.disableApprovalWorkflow && documentId && String(form.status) === 'SUBMITTED' && can('purchase', 'Approve') && (
+          {!config.disableApprovalWorkflow && !config.submitOnly && documentId && String(form.status) === 'SUBMITTED' && can('purchase', 'Approve') && (
             <>
               <button
                 onClick={() => setActionModal({ action: 'approve', danger: false })}
@@ -1709,7 +1605,7 @@ export default function PurchaseDocScreen({ config, initialDocId, viewOnly = fal
               </button>
             </>
           )}
-          {!config.disableApprovalWorkflow && documentId && String(form.status) === 'REJECTED' && (
+          {!config.disableApprovalWorkflow && !config.submitOnly && documentId && String(form.status) === 'REJECTED' && (
             <button
               onClick={() => setActionModal({ action: 'reopen', danger: false })}
               className="btn btn-g"
@@ -1884,7 +1780,7 @@ export default function PurchaseDocScreen({ config, initialDocId, viewOnly = fal
             }
 
             return (
-              <div key={field.key} className={`fld ${field.span2 ? 'span2' : ''}`}>
+              <div key={field.key} className={`fld ${field.span2 ? 'span2' : ''} ${isFieldError(field.key) ? 'invalid' : ''}`}>
                 <span>{field.label}</span>
                 {field.type === 'textarea' ? (
                   <textarea
@@ -1901,6 +1797,7 @@ export default function PurchaseDocScreen({ config, initialDocId, viewOnly = fal
                     onChange={(e) => setForm((prev) => ({ ...prev, [field.key]: e.target.value }))}
                     className="in"
                   >
+                    {!val && <option value="">{`-- Select ${field.label.replace(' *', '')} --`}</option>}
                     {(field.options || []).map((opt) => (
                       <option key={opt} value={opt}>{opt}</option>
                     ))}
@@ -2072,10 +1969,16 @@ export default function PurchaseDocScreen({ config, initialDocId, viewOnly = fal
           Cancel
         </button>
 
-        {editable && !config.hideBottomSave && (
+        {editable && !config.hideBottomSave && !(config.submitOnly && !documentId) && (
           <button type="button" onClick={() => handleSave()} disabled={isBusy} className="btn btn-p">
             <span className="material-symbols-rounded">save</span>
             {isBusy ? 'Saving...' : 'Save Document'}
+          </button>
+        )}
+        {config.submitOnly && !documentId && (
+          <button type="button" onClick={() => handleCreateAndSubmit()} disabled={isBusy} className="btn btn-g">
+            <span className="material-symbols-rounded">send</span>
+            {isBusy ? 'Submitting...' : 'Submit'}
           </button>
         )}
 

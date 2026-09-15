@@ -14,6 +14,7 @@ public class SupplierQuotation extends BaseDoc implements DocEntity {
     @Column(name = "enquiry_ref_no", length = 60) String enquiryRefNo;
     @Column(name = "enquiry_number", length = 60) String enquiryNumber;
     @Column(name = "valid_until") LocalDate validUntil;
+    @Column(name = "expected_delivery_date") LocalDate expectedDeliveryDate;
     @Column(length = 30) String currency;
     @Column(name = "payment_terms", length = 200) String paymentTerms;
     @Column(name = "delivery_terms", length = 200) String deliveryTerms;

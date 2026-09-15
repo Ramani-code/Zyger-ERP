@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import axiosClient from '../../../api/axiosClient';
+import { useAuth } from '../../../contexts/AuthContext';
 import { formatNumber } from '../../../utils/format';
 import { useToast } from '../../../contexts/ToastContext';
 import { useTabs } from '../../../contexts/TabsContext';
@@ -38,6 +39,7 @@ interface QuotationDoc {
   paymentTerms?: string;
   deliveryTerms?: string;
   validUntil?: string;
+  expectedDeliveryDate?: string;
   status?: string;
   freight?: number;
   insurance?: number;
@@ -72,6 +74,7 @@ function loadSelection(): number[] {
 export default function QuotationComparisonPage() {
   const { toast } = useToast();
   const { openTab } = useTabs();
+  const { user } = useAuth();
 
   const [loading, setLoading] = useState(true);
   const [creatingPO, setCreatingPO] = useState(false);
@@ -81,6 +84,10 @@ export default function QuotationComparisonPage() {
   const [pendingIds, setPendingIds] = useState<number[]>([]);
   const [selectedEnquiry, setSelectedEnquiry] = useState<string>('ALL');
   const [searchTerm, setSearchTerm] = useState<string>('');
+  // Quotation lines store the UOM master's code (e.g. "UOM-2026-0001"), not
+  // its display name — this map resolves code -> name so the matrix shows
+  // "Nos" instead of the raw code.
+  const [uomNameByCode, setUomNameByCode] = useState<Record<string, string>>({});
 
   const fetchQuotations = async () => {
     setLoading(true);
@@ -97,6 +104,14 @@ export default function QuotationComparisonPage() {
 
   useEffect(() => {
     fetchQuotations();
+    axiosClient.get('/master/uoms').then((res) => {
+      const data = Array.isArray(res.data) ? res.data : [];
+      const map: Record<string, string> = {};
+      data.forEach((u: any) => {
+        if (u.code) map[u.code] = u.name || u.code;
+      });
+      setUomNameByCode(map);
+    }).catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -136,7 +151,10 @@ export default function QuotationComparisonPage() {
 
   const lineRate = (l?: QuotationLine) => Number(l?.unitPrice ?? l?.rate ?? 0);
   const lineQty = (l?: QuotationLine) => Number(l?.requiredQty ?? l?.orderQty ?? l?.qty ?? 1);
-  const lineUom = (l?: QuotationLine) => l?.uom || 'PCS';
+  const lineUom = (l?: QuotationLine) => {
+    const raw = l?.uom || 'PCS';
+    return uomNameByCode[raw] || raw;
+  };
   const lineLead = (l?: QuotationLine) => Number(l?.deliveryLeadTime ?? 7);
 
   // Supplier quotation line semantics: discount & tax are % values, netPrice is the line total.
@@ -184,6 +202,15 @@ export default function QuotationComparisonPage() {
     return 0;
   });
 
+  // Fastest delivery: earliest Expected Delivery Date among quotes that have
+  // one set. Only meaningful once at least one quote in the comparison has
+  // actually entered a date, so it stays unset (no badge shown) otherwise.
+  const quotesWithDeliveryDate = comparables.filter((q) => !!q.expectedDeliveryDate);
+  const sortedByDelivery = [...quotesWithDeliveryDate].sort(
+    (a, b) => new Date(a.expectedDeliveryDate!).getTime() - new Date(b.expectedDeliveryDate!).getTime()
+  );
+  const fastestDeliveryId = sortedByDelivery[0]?.id;
+
   const matrixItems = useMemo<MatrixItem[]>(() => {
     const map = new Map<string, MatrixItem>();
     comparables.forEach((q) => {
@@ -198,7 +225,7 @@ export default function QuotationComparisonPage() {
       });
     });
     return Array.from(map.values());
-  }, [comparables]);
+  }, [comparables, uomNameByCode]);
 
   const getRankBadge = (idx: number) => {
     const style: React.CSSProperties = {
@@ -319,7 +346,7 @@ export default function QuotationComparisonPage() {
         contactPerson: quot.contactPerson,
         phone: quot.phone,
         email: quot.email,
-        buyer: '',
+        buyer: user?.username || '',
         paymentTerms: quot.paymentTerms || '30 Days',
         deliveryTerms: quot.deliveryTerms || 'EXW - Ex Works',
         currency: 'INR',
@@ -499,9 +526,19 @@ export default function QuotationComparisonPage() {
                     {filteredQuotations.map((q) => {
                       const rank = rankOf(q.id);
                       const isL1 = sortedByCost[0]?.id === q.id;
+                      const isFastest = fastestDeliveryId !== undefined && q.id === fastestDeliveryId;
+                      const headClasses = [isL1 ? 'l1-col-head' : '', isFastest ? 'fast-col-head' : ''].filter(Boolean).join(' ') || undefined;
                       return (
-                        <th key={q.id} className={isL1 ? 'l1-col-head' : undefined} style={{ textAlign: 'center', minWidth: 220 }}>
-                          {getRankBadge(rank)}
+                        <th key={q.id} className={headClasses} style={{ textAlign: 'center', minWidth: 220 }}>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 4 }}>
+                            {getRankBadge(rank)}
+                            {isFastest && (
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 10px', borderRadius: 99, fontSize: 11, fontWeight: 800, letterSpacing: '.03em', background: '#2563eb', color: '#ffffff', boxShadow: '0 2px 4px rgba(0,0,0,0.2)' }}>
+                                <span className="material-symbols-rounded" style={{ fontSize: 14 }}>bolt</span>
+                                FASTEST DELIVERY
+                              </span>
+                            )}
+                          </div>
                           <div style={{ color: '#fff', fontWeight: 700, fontSize: 13, marginTop: 8, textTransform: 'none', letterSpacing: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6 }}>
                             <span>{q.supplier}</span>
                             <button
@@ -539,6 +576,26 @@ export default function QuotationComparisonPage() {
                         <td key={q.id} className={isL1 ? 'l1-col-cell' : undefined} style={{ textAlign: 'center' }}>
                           <div>{q.date || '—'}</div>
                           <div className="mut">Valid till {q.validUntil || '—'}</div>
+                        </td>
+                      );
+                    })}
+                  </tr>
+                  <tr>
+                    <td>Expected Delivery Date</td>
+                    {filteredQuotations.map((q) => {
+                      const isL1 = sortedByCost[0]?.id === q.id;
+                      const isFastest = fastestDeliveryId !== undefined && q.id === fastestDeliveryId;
+                      const cellClasses = [isL1 ? 'l1-col-cell' : '', isFastest ? 'fast-col-cell' : ''].filter(Boolean).join(' ') || undefined;
+                      return (
+                        <td key={q.id} className={cellClasses} style={{ textAlign: 'center' }}>
+                          <div style={{ fontWeight: isFastest ? 700 : 400, color: isFastest ? '#2563eb' : undefined }}>
+                            {q.expectedDeliveryDate || '—'}
+                          </div>
+                          {isFastest && (
+                            <div style={{ fontSize: 10, fontWeight: 700, color: '#1d4ed8', background: '#dbeafe', border: '1px solid #bfdbfe', padding: '1px 6px', borderRadius: 4, display: 'inline-block', marginTop: 3 }}>
+                              Fastest Delivery
+                            </div>
+                          )}
                         </td>
                       );
                     })}

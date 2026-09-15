@@ -527,10 +527,16 @@ export default function PurchasableItemScreen() {
                         </span>
                       </td>
                       <td>
-                        <div style={{ display: 'flex', gap: '6px' }}>
-                          <button type="button" className="btn btn-sm btn-secondary" onClick={() => { setForm(r); setEditId(r.id!); setIsViewOnly(true); setViewMode('FORM'); }}>View</button>
-                          <button type="button" className="btn btn-sm" onClick={() => { setForm(r); setEditId(r.id!); setIsViewOnly(false); setViewMode('FORM'); }}>Edit</button>
-                          <button type="button" className="btn btn-sm btn-d" onClick={() => setDeleteTarget(r)}>Delete</button>
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', justifyContent: 'center' }}>
+                          <button type="button" className="ibtn" title="View" onClick={() => { setForm(r); setEditId(r.id!); setIsViewOnly(true); setViewMode('FORM'); }}>
+                            <span className="material-symbols-rounded" style={{ fontSize: '18px' }}>visibility</span>
+                          </button>
+                          <button type="button" className="ibtn" title="Edit" onClick={() => { setForm(r); setEditId(r.id!); setIsViewOnly(false); setViewMode('FORM'); }}>
+                            <span className="material-symbols-rounded" style={{ fontSize: '18px' }}>edit</span>
+                          </button>
+                          <button type="button" className="ibtn danger" title="Delete" onClick={() => setDeleteTarget(r)}>
+                            <span className="material-symbols-rounded" style={{ fontSize: '18px' }}>delete</span>
+                          </button>
                         </div>
                       </td>
                     </tr>

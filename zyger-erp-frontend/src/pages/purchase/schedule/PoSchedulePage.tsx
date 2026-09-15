@@ -7,6 +7,8 @@ import { useToast } from '../../../contexts/ToastContext';
 import PurchaseOrderPage from '../order/PurchaseOrderPage';
 import { logSystemActivity } from '../../../utils/activityLog';
 import { exportToCsv } from '../../../utils/csvExport';
+import { filterPurchaseRelevantItems } from '../../../utils/itemClassification';
+import SearchableItemLookup from '../../../components/common/SearchableItemLookup';
 
 interface ScheduleRow {
   id?: number;
@@ -163,7 +165,7 @@ export default function PoSchedulePage() {
       }
 
       if (itemRes.status === 'fulfilled' && Array.isArray(itemRes.value.data)) {
-        setItems(itemRes.value.data);
+        setItems(filterPurchaseRelevantItems(itemRes.value.data));
       } else {
         setItems([]);
       }
@@ -692,22 +694,11 @@ export default function PoSchedulePage() {
                   <span>
                     Item Code (Select Option) <em>*</em>
                   </span>
-                  <select
-                    className="in"
+                  <SearchableItemLookup
                     value={newSchedule.itemCode}
-                    required
-                    onChange={(e) => handleItemSelect(e.target.value)}
-                  >
-                    <option value="">— Select Item Code —</option>
-                    {items.map((i: any) => (
-                      <option key={i.code} value={i.code}>
-                        {i.code} — {i.name}
-                      </option>
-                    ))}
-                    {newSchedule.itemCode && !items.some((i) => i.code === newSchedule.itemCode) && (
-                      <option value={newSchedule.itemCode}>{newSchedule.itemCode}</option>
-                    )}
-                  </select>
+                    items={items}
+                    onChange={handleItemSelect}
+                  />
                 </label>
 
                 <label className="fld">

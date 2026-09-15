@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7
+
 # ---- Build stage: compile and package the Spring Boot executable JAR ----
 FROM eclipse-temurin:25-jdk-alpine AS build
 WORKDIR /app
@@ -8,14 +10,18 @@ WORKDIR /app
 COPY settings.gradle build.gradle ./
 COPY --chmod=755 gradlew ./
 COPY gradle gradle
-RUN ./gradlew --no-daemon dependencies > /dev/null 2>&1 || true
+# Cache the Gradle dependency/wrapper download dir across builds (BuildKit
+# cache mount) so redeploys don't re-download the internet every time.
+RUN --mount=type=cache,target=/root/.gradle \
+    ./gradlew --no-daemon dependencies > /dev/null 2>&1 || true
 
 # Copy sources and build the executable JAR (bootJar)
 COPY src src
-RUN ./gradlew --no-daemon bootJar -x test
+RUN --mount=type=cache,target=/root/.gradle \
+    ./gradlew --no-daemon bootJar -x test
 
-# ---- Runtime stage: minimal Java runtime only ----
-FROM eclipse-temurin:25-jdk-alpine AS runtime
+# ---- Runtime stage: minimal JRE only (no compiler/tools) ----
+FROM eclipse-temurin:25-jre-alpine AS runtime
 
 # Install curl for the container health check only (minimal increase)
 RUN apk add --no-cache curl \
@@ -46,4 +52,14 @@ EXPOSE 9090
 HEALTHCHECK --interval=30s --timeout=10s --start-period=90s --retries=5 \
   CMD curl -fsS http://127.0.0.1:9090/actuator/health || exit 1
 
-ENTRYPOINT ["java", "-Xmx512m", "-jar", "/app/app.jar"]
+# -XX:MaxRAMPercentage/-XX:InitialRAMPercentage let the JVM heap scale with
+# whatever memory the container actually gets instead of a fixed 512m (which
+# was tight enough to cause GC pauses / slow responses under load).
+# TieredStopAtLevel=1 + no JIT background compilation threads beyond CPU
+# count trims a bit of startup time; safe defaults for a small staging box.
+ENTRYPOINT ["java", \
+  "-XX:InitialRAMPercentage=50.0", \
+  "-XX:MaxRAMPercentage=75.0", \
+  "-XX:+UseG1GC", \
+  "-XX:+UseContainerSupport", \
+  "-jar", "/app/app.jar"]

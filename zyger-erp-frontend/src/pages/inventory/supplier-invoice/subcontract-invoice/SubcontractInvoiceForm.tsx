@@ -17,6 +17,7 @@ import { filterPurchaseRelevantItems } from '../../../../utils/itemClassificatio
 import { toNumber } from '../../../../utils/format';
 import StatusBadge from '../../../../components/common/StatusBadge';
 import ConfirmActionModal from '../../../../components/common/ConfirmActionModal';
+import SearchableItemLookup from '../../../../components/common/SearchableItemLookup';
 import { PROCESS_OPTIONS } from '../../../../config/supplierInvoiceConfig';
 import { subcontractInvoiceService } from '../../../../services/supplierInvoiceService';
 import {
@@ -747,22 +748,13 @@ export default function SubcontractInvoiceForm({
                 {form.lines.map((line, index) => (
                   <tr key={index}>
                     <td className="num mut">{index + 1}</td>
-                    <td>
-                      <select
-                        className="in w-i"
+                    <td className="w-i">
+                      <SearchableItemLookup
                         value={line.itemCode}
                         disabled={!editable}
-                        onChange={(event) =>
-                          updateLine(index, 'itemCode', event.target.value)
-                        }
-                      >
-                        <option value="">— Select Item —</option>
-                        {allowedItems.map((item) => (
-                          <option key={item.code} value={item.code}>
-                            {item.code} — {item.description}
-                          </option>
-                        ))}
-                      </select>
+                        items={allowedItems}
+                        onChange={(val) => updateLine(index, 'itemCode', val)}
+                      />
                     </td>
 
                     <td>
