@@ -63,8 +63,8 @@ export default function StoreStockTab() {
 
   const handleExport = async (format: 'xlsx' | 'pdf') => {
     try {
-      await inventoryReportsService.exportFile('store-stock', 'Store-wise Stock', params, format);
-      toast('Store-wise stock export downloaded.');
+      await inventoryReportsService.exportFile('store-stock', 'Stock Detail', params, format);
+      toast('Stock detail export downloaded.');
     } catch (exportError) {
       toast(getApiErrorMessage(exportError, 'Export failed.'), 'error');
     }

@@ -444,14 +444,28 @@ public class StockService {
 
         if (existing.isPresent()) {
             StockBalance sb = existing.get();
-            sb.setQty(sb.getQty().add(addQty).subtract(subtractQty));
-            // A row that nets to zero (or, if some earlier bug ever let it happen,
-            // negative) is dead weight regardless of status: a lingering QC_HOLD/
-            // BLOCKED/etc. row at qty<=0 isn't just harmless clutter — a negative one
-            // would silently corrupt the on_hand-reserved-qc_hold "available" formula
-            // (BR-INV-ENGINE-2) for every other status bucket of this item/location.
-            // This used to only clean up FREE rows.
-            if (sb.getQty().compareTo(BigDecimal.ZERO) <= 0) {
+            BigDecimal newQty = sb.getQty().add(addQty).subtract(subtractQty);
+            // Going negative means the caller asked to deduct more than this exact
+            // batch/heat/status bucket holds — verifyStockAvailability() only checks the
+            // item+location TOTAL across every batch, so an over-issue against one specific
+            // batch can pass that check while this bucket alone can't cover it. This used to
+            // fall through to the "zero or negative -> delete" cleanup below, which silently
+            // wiped out whatever real quantity the row DID have (see the ISI-2026-0005
+            // incident: a real 140-unit batch was deleted entirely to "satisfy" a bogus
+            // 7,920-unit issue). Fail loudly instead — the caller's transaction rolls back.
+            if (newQty.compareTo(BigDecimal.ZERO) < 0) {
+                throw new IllegalStateException(
+                        "Cannot deduct " + subtractQty + " " + stockStatus + " stock for item " + itemCode
+                                + " at " + location + " batch '" + str(batchNo) + "' / heat '" + str(heatNo)
+                                + "' — only " + sb.getQty() + " available in this exact batch/heat/status.");
+            }
+            // A row that nets to exactly zero is dead weight regardless of status: a
+            // lingering QC_HOLD/BLOCKED/etc. row at qty<=0 isn't just harmless clutter — it
+            // would corrupt the on_hand-reserved-qc_hold "available" formula (BR-INV-ENGINE-2)
+            // for every other status bucket of this item/location. This used to only clean up
+            // FREE rows.
+            sb.setQty(newQty);
+            if (newQty.compareTo(BigDecimal.ZERO) == 0) {
                 balances.delete(sb);
             } else {
                 balances.save(sb);
@@ -461,6 +475,19 @@ public class StockService {
                     .itemCode(itemCode).location(location).batchNo(batchNo).heatNo(heatNo)
                     .stockStatus(stockStatus).qty(addQty)
                     .build());
+        } else if (subtractQty.compareTo(BigDecimal.ZERO) > 0) {
+            // A pure deduction with no matching balance row used to silently do nothing —
+            // verifyStockAvailability() only checks the item+location TOTAL across every
+            // batch, so it happily approves issuing against a batch/heat/status bucket that
+            // itself has zero (or was never created). The ledger entry the caller already
+            // wrote would then claim stock left while the actual balance never moved a unit.
+            // Failing loudly here rolls back the whole transaction (StockService is
+            // @Transactional), so the ledger entry never survives either.
+            throw new IllegalStateException(
+                    "Cannot deduct " + subtractQty + " " + stockStatus + " stock for item " + itemCode
+                            + " at " + location + " — no matching balance for batch '" + str(batchNo)
+                            + "' / heat '" + str(heatNo) + "'. Stock exists elsewhere at this location "
+                            + "but not in this exact batch/heat/status.");
         }
     }
 

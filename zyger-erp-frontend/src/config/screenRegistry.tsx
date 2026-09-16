@@ -52,6 +52,7 @@ const InventoryDashboardPage = lazy(() => import('../pages/inventory/reports/Inv
 const InventoryLogPage = lazy(() => import('../pages/inventory/reports/InventoryLogPage'));
 const CurrentStockPage = lazy(() => import('../pages/inventory/reports/CurrentStockPage'));
 const StoreStockSummaryPage = lazy(() => import('../pages/inventory/reports/StoreStockSummaryPage'));
+const StoreDetailPage = lazy(() => import('../pages/inventory/reports/StoreDetailPage'));
 const TraceabilityViewerPage = lazy(() => import('../pages/inventory/reports/TraceabilityViewerPage'));
 const PeriodReportPage = lazy(() => import('../pages/inventory/reports/PeriodReportPage'));
 const QualityDashboard = lazy(() => import('../pages/quality/dashboard/QualityDashboard'));
@@ -229,6 +230,7 @@ export const SCREEN_REGISTRY: Record<string, ScreenDefinition> = Object.fromEntr
     'inventory-log': InventoryLogPage,
     'current-stock': CurrentStockPage,
     'store-stock-summary': StoreStockSummaryPage,
+    'store-detail': StoreDetailPage,
     'traceability-viewer': TraceabilityViewerPage,
     'inventory-period-report': PeriodReportPage,
     'quality-dashboard': QualityDashboard,

@@ -64,27 +64,15 @@ export const inventoryReportsService = {
     return response.data;
   },
 
+  // Serves both the Current Stock screen (as DrilldownRow, via the generic
+  // drilldown/current-stock path) and Item-wise Stock (as ItemStockRow below) —
+  // one backend computation (currentStockRows()), two typed views of the same rows.
   async getCurrentStock(
-    params: ReportQueryParams,
-    signal?: AbortSignal
-  ): Promise<PageDto<DrilldownRow>> {
-    const response = await apiClient.get<PageDto<DrilldownRow>>(
-      `${BASE}/current-stock`,
-      {
-        params: buildParams(params),
-        signal,
-      }
-    );
-
-    return response.data;
-  },
-
-  async getItemStock(
     params: ReportQueryParams,
     signal?: AbortSignal
   ): Promise<PageDto<ItemStockRow>> {
     const response = await apiClient.get<PageDto<ItemStockRow>>(
-      `${BASE}/item-stock`,
+      `${BASE}/current-stock`,
       {
         params: buildParams(params),
         signal,

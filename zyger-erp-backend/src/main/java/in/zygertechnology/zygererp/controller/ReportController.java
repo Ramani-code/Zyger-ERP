@@ -323,19 +323,10 @@ public class ReportController {
                 q.getOrDefault("format", "xlsx"), "current-stock");
     }
 
-    /** Item-wise stock: one row per item with totals across all stores plus a
-     * per-store breakdown — the "how much of this item do I have anywhere"
-     * report for the shop floor. */
-    @GetMapping("/api/inventory/reports/item-stock")
-    Map<String, Object> itemStock(@RequestParam Map<String, String> q) {
-        return docs.paginate(itemStockRows(q), q);
-    }
-
-    @GetMapping("/api/inventory/reports/item-stock/export")
-    ResponseEntity<byte[]> itemStockExport(@RequestParam Map<String, String> q) {
-        return file(export.build(itemStockRows(q), q.getOrDefault("format", "xlsx"), "item-stock"),
-                q.getOrDefault("format", "xlsx"), "item-stock");
-    }
+    // Item-wise stock used to be its own endpoint/method (itemStockRows()) computing
+    // "stock aggregated by item" a second, independent way. It's now exactly
+    // currentStockRows() — which already includes the per-store breakdown this report
+    // needs — so the frontend calls /current-stock instead; see currentStockRows().
 
     /** Store-wise stock: per store, its item-by-item breakdown (summed across
      * batches/heats) — filter with location=<storeCode> for a single store. */
@@ -555,88 +546,6 @@ public class ReportController {
         return m;
     }
 
-    /** Item-wise stock rows: one row per item (aggregated across stores),
-     * enriched with item master details and a per-store quantity breakdown. */
-    private List<Map<String, Object>> itemStockRows(Map<String, String> q) {
-        Map<String, double[]> totals = new LinkedHashMap<>(); // [onHand, reserved, qcHold, available]
-        Map<String, Map<String, double[]>> perStore = new LinkedHashMap<>(); // item -> storeCode -> [onHand, available]
-        for (StockService.Balance b : stock.balances().values()) {
-            if (!isEmpty(q.get("location")) && !q.get("location").equals(b.loc())) continue;
-            double[] t = totals.computeIfAbsent(b.item(), x -> new double[4]);
-            t[0] += b.onHand();
-            t[1] += b.reserved();
-            t[2] += b.qcHold();
-            t[3] += b.available();
-            double[] s = perStore.computeIfAbsent(b.item(), x -> new LinkedHashMap<>())
-                    .computeIfAbsent(b.loc(), x -> new double[2]);
-            s[0] += b.onHand();
-            s[1] += b.available();
-        }
-        Map<String, StoreMaster> storeByName = new LinkedHashMap<>();
-        for (StoreMaster s : stores.findAll()) storeByName.put(s.getCode(), s);
-        Map<String, LocalDate> lastMove = lastItemMovement();
-        Map<String, Double> inwardRates = latestInwardItemRates();
-        List<Map<String, Object>> rows = new ArrayList<>();
-        for (ItemMaster it : items.findAll()) {
-            double[] t = totals.getOrDefault(it.getCode(), new double[4]);
-            double onHand = t[0];
-            boolean low = isLowStock(onHand, it);
-            boolean hasStock = onHand > 0 || t[1] > 0 || t[2] > 0;
-            if (!hasStock && !low && !"true".equals(q.get("includeZero"))) continue;
-            if ("true".equals(q.get("lowStockOnly")) && !low) continue;
-            String st = reorderStatus(onHand, it);
-            if (!isEmpty(q.get("status")) && !q.get("status").equalsIgnoreCase(st)) continue;
-            if (!isEmpty(q.get("itemType")) && !q.get("itemType").equalsIgnoreCase(str(it.getItemType())))
-                continue;
-            if (!isEmpty(q.get("category")) && !q.get("category").equalsIgnoreCase(str(it.getCategory())))
-                continue;
-            if (!isEmpty(q.get("search"))) {
-                String s = q.get("search").toLowerCase();
-                if (!it.getCode().toLowerCase().contains(s)
-                        && !str(it.getDescription()).toLowerCase().contains(s)
-                        && !str(it.getSpecification()).toLowerCase().contains(s)) continue;
-            }
-            double rate = itemRate(it, inwardRates, it.getCode(), null);
-            Map<String, Object> r = new LinkedHashMap<>();
-            r.put("id", it.getCode());
-            r.put("itemCode", it.getCode());
-            r.put("itemName", it.getDescription());
-            r.put("specification", str(it.getSpecification()));
-            r.put("itemType", str(it.getItemType()));
-            r.put("itemGroup", groupName(it));
-            r.put("category", str(it.getCategory()));
-            r.put("uom", str(it.getUom()));
-            r.put("totalOnHand", round(onHand));
-            r.put("totalReserved", round(t[1]));
-            r.put("totalQcHold", round(t[2]));
-            r.put("totalAvailable", round(t[3]));
-            r.put("totalValue", round(onHand * rate));
-            r.put("safetyStock", round(it.getSafetyStock() == null ? 0 : it.getSafetyStock().doubleValue()));
-            r.put("reorderPoint", round(reorderThreshold(it)));
-            r.put("maxStockLevel", round(it.getMaxStockLevel() == null ? 0 : it.getMaxStockLevel().doubleValue()));
-            r.put("reorderQty", it.getReorderQty() == null ? null : round(it.getReorderQty().doubleValue()));
-            r.put("suggestedOrderQty", round(suggestedOrderQty(it)));
-            r.put("avgDailyConsumption", round(it.getAvgDailyConsumption() == null ? 0 : it.getAvgDailyConsumption().doubleValue()));
-            r.put("reorderStatus", st);
-            r.put("lowStock", low);
-            r.put("multiStore", perStore.getOrDefault(it.getCode(), Map.of()).size() > 1);
-            r.put("lastMovementDate", lastMove.get(it.getCode()));
-            List<Map<String, Object>> storeList = new ArrayList<>();
-            for (Map.Entry<String, double[]> e : perStore.getOrDefault(it.getCode(), Map.of()).entrySet()) {
-                Map<String, Object> sm = new LinkedHashMap<>();
-                sm.put("storeCode", e.getKey());
-                StoreMaster m = storeByName.get(e.getKey());
-                sm.put("storeName", m == null ? e.getKey() : m.getName());
-                sm.put("onHand", round(e.getValue()[0]));
-                sm.put("available", round(e.getValue()[1]));
-                storeList.add(sm);
-            }
-            r.put("perStore", storeList);
-            rows.add(r);
-        }
-        return rows;
-    }
-
     /** Store-wise stock rows: one row per store × item (summed across batches
      * and heats). Pass location=<storeCode> for a single store's breakdown. */
     private List<Map<String, Object>> storeStockRows(Map<String, String> q) {
@@ -809,6 +718,10 @@ public class ReportController {
         Map<String, double[]> totals = new LinkedHashMap<>(); // [onHand, reserved, qcHold, available]
         Map<String, Set<String>> batchesByItem = new LinkedHashMap<>();
         Map<String, Set<String>> heatsByItem = new LinkedHashMap<>();
+        // item -> storeCode -> [onHand, available] — the per-store breakdown that used to
+        // live only in the now-removed itemStockRows()/item-stock endpoint. Computed here,
+        // in the same pass, so "stock aggregated by item" has exactly one implementation.
+        Map<String, Map<String, double[]>> perStoreByItem = new LinkedHashMap<>();
         for (StockService.Balance b : allBalances.values()) {
             if (b.onHand() <= 0 && b.reserved() <= 0) continue;
             if (!isEmpty(q.get("location")) && !q.get("location").equals(b.loc())) continue;
@@ -820,7 +733,13 @@ public class ReportController {
             a[3] += b.available();
             if (!str(b.batch()).isBlank()) batchesByItem.computeIfAbsent(b.item(), x -> new LinkedHashSet<>()).add(b.batch());
             if (!str(b.heat()).isBlank()) heatsByItem.computeIfAbsent(b.item(), x -> new LinkedHashSet<>()).add(b.heat());
+            double[] s = perStoreByItem.computeIfAbsent(b.item(), x -> new LinkedHashMap<>())
+                    .computeIfAbsent(b.loc(), x -> new double[2]);
+            s[0] += b.onHand();
+            s[1] += b.available();
         }
+        Map<String, StoreMaster> storeByCode = new LinkedHashMap<>();
+        for (StoreMaster s : stores.findAll()) storeByCode.put(s.getCode(), s);
 
         long n = 0;
         for (Map.Entry<String, double[]> en : totals.entrySet()) {
@@ -830,6 +749,18 @@ public class ReportController {
             ItemMaster it = items.findByCode(itemCode).orElse(null);
             boolean low = it != null && onHand < (it.getSafetyStock() == null ? 0 : it.getSafetyStock().doubleValue());
             if ("true".equals(q.get("lowStockOnly")) && !low) continue;
+            if (!isEmpty(q.get("itemType")) && !q.get("itemType").equalsIgnoreCase(it == null ? "" : str(it.getItemType())))
+                continue;
+            if (!isEmpty(q.get("category")) && !q.get("category").equalsIgnoreCase(it == null ? "" : str(it.getCategory())))
+                continue;
+            if (!isEmpty(q.get("search"))) {
+                String sTerm = q.get("search").toLowerCase();
+                String desc = it == null ? "" : str(it.getDescription()).toLowerCase();
+                String spec = it == null ? "" : str(it.getSpecification()).toLowerCase();
+                if (!itemCode.toLowerCase().contains(sTerm) && !desc.contains(sTerm) && !spec.contains(sTerm)) continue;
+            }
+            String reorderSt = reorderStatus(onHand, it);
+            if (!isEmpty(q.get("status")) && !q.get("status").equalsIgnoreCase(reorderSt)) continue;
             double rate = itemRate(it, inwardRates, itemCode, null);
             Map<String, Object> r = new LinkedHashMap<>();
             r.put("id", "s" + (++n));
@@ -854,11 +785,24 @@ public class ReportController {
             r.put("avgDailyConsumption", it == null ? 0 : round(it.getAvgDailyConsumption() == null ? 0 : it.getAvgDailyConsumption().doubleValue()));
             r.put("reorderQty", it == null || it.getReorderQty() == null ? null : round(it.getReorderQty().doubleValue()));
             r.put("suggestedOrderQty", it == null ? 0d : round(suggestedOrderQty(it)));
-            r.put("reorderStatus", reorderStatus(onHand, it));
+            r.put("reorderStatus", reorderSt);
             r.put("lastMovementDate", lastMove.get(itemCode));
             r.put("lowStock", low);
             r.put("status", availabilityStatus(onHand, available, low));
             r.put("sourceTrace", sourceTrace(itemCode, null, null));
+            Map<String, double[]> perStore = perStoreByItem.getOrDefault(itemCode, Map.of());
+            r.put("multiStore", perStore.size() > 1);
+            List<Map<String, Object>> storeList = new ArrayList<>();
+            for (Map.Entry<String, double[]> se : perStore.entrySet()) {
+                Map<String, Object> sm = new LinkedHashMap<>();
+                sm.put("storeCode", se.getKey());
+                StoreMaster sMaster = storeByCode.get(se.getKey());
+                sm.put("storeName", sMaster == null ? se.getKey() : sMaster.getName());
+                sm.put("onHand", round(se.getValue()[0]));
+                sm.put("available", round(se.getValue()[1]));
+                storeList.add(sm);
+            }
+            r.put("perStore", storeList);
             rows.add(r);
             seenItems.add(itemCode);
         }
@@ -876,10 +820,30 @@ public class ReportController {
                 if (withStock.contains(it.getCode())) continue;
                 if (seenItems.contains(it.getCode())) continue;
                 if (!isEmpty(q.get("location"))) continue;
-                if ("true".equals(q.get("lowStockOnly"))) continue;
-                double rate = itemRate(it, inwardRates, it.getCode(), null);
+                // A deactivated item with zero stock has nothing left to track — keep it
+                // out of the zero-stock listing entirely rather than showing it forever.
+                // (An item WITH real stock still shows regardless of active status, further
+                // up in this method — deactivating never hides stock that actually exists.)
+                if (!it.isActive()) continue;
                 double safety = it.getSafetyStock() == null ? 0 : it.getSafetyStock().doubleValue();
                 boolean low = 0 < safety;
+                // A zero-stock item that IS below its safety stock (i.e. genuinely low/out
+                // of stock) must still show under "low stock only" — only a zero-stock item
+                // that ISN'T tracked as low gets skipped here.
+                if ("true".equals(q.get("lowStockOnly")) && !low) continue;
+                if (!isEmpty(q.get("itemType")) && !q.get("itemType").equalsIgnoreCase(str(it.getItemType())))
+                    continue;
+                if (!isEmpty(q.get("category")) && !q.get("category").equalsIgnoreCase(str(it.getCategory())))
+                    continue;
+                if (!isEmpty(q.get("search"))) {
+                    String sTerm = q.get("search").toLowerCase();
+                    if (!it.getCode().toLowerCase().contains(sTerm)
+                            && !str(it.getDescription()).toLowerCase().contains(sTerm)
+                            && !str(it.getSpecification()).toLowerCase().contains(sTerm)) continue;
+                }
+                if (!isEmpty(q.get("status")) && !q.get("status").equalsIgnoreCase(reorderStatus(0d, it)))
+                    continue;
+                double rate = itemRate(it, inwardRates, it.getCode(), null);
                 Map<String, Object> r = new LinkedHashMap<>();
                 r.put("id", "z" + (++n));
                 r.put("itemCode", it.getCode());
@@ -908,6 +872,8 @@ public class ReportController {
                 r.put("lowStock", low);
                 r.put("status", "NOT_AVAILABLE");
                 r.put("sourceTrace", "");
+                r.put("multiStore", false);
+                r.put("perStore", List.of());
                 rows.add(r);
             }
         }

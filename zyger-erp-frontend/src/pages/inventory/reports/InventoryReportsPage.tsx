@@ -35,12 +35,30 @@ const PERIOD_LABELS: Record<Period, string> = {
   THIS_YEAR: 'This Year',
 };
 
-const TABS: Array<{ key: TabKey; label: string; icon: string }> = [
-  { key: 'overview', label: 'Overview', icon: 'space_dashboard' },
-  { key: 'item', label: 'Item-wise Stock', icon: 'view_list' },
-  { key: 'store', label: 'Store-wise Stock', icon: 'warehouse' },
-  { key: 'movements', label: 'Stock Movements', icon: 'swap_vert' },
-  { key: 'reorder', label: 'Re-order', icon: 'shopping_cart' },
+// Single left-rail nav for the whole page — replaces the old toolbar-row +
+// tab-strip pair, which gave every screen two different-looking places to
+// start from. An item with `key` switches the in-page view below; an item
+// with `screenId` opens a separate full tab instead (a raw ledger, a fully
+// filterable drilldown grid, etc. — content that doesn't fit as a sub-view).
+type NavItem =
+  | { kind: 'tab'; key: TabKey; label: string; icon: string }
+  | { kind: 'screen'; screenId: string; label: string; icon: string };
+
+const NAV_ITEMS: NavItem[] = [
+  { kind: 'tab', key: 'overview', label: 'Overview', icon: 'space_dashboard' },
+  { kind: 'screen', screenId: 'store-stock-summary', label: 'Stock by Store', icon: 'warehouse' },
+  // Renders one row per item × store (StoreStockTab / the store-stock API) —
+  // genuinely SKU-level detail, not the store-level totals "Stock by Store"
+  // (store-stock-summary) shows. Naming it "Stock by Store" collided with
+  // that other, different-granularity screen.
+  { kind: 'tab', key: 'store', label: 'Stock Detail', icon: 'grid_view' },
+  { kind: 'tab', key: 'item', label: 'Item-wise Stock', icon: 'view_list' },
+  { kind: 'screen', screenId: 'current-stock', label: 'Current Stock (full grid)', icon: 'inventory' },
+  { kind: 'tab', key: 'movements', label: 'Stock Movements', icon: 'swap_vert' },
+  { kind: 'screen', screenId: 'inventory-log', label: 'Inventory Log', icon: 'menu_book' },
+  { kind: 'tab', key: 'reorder', label: 'Re-order', icon: 'shopping_cart' },
+  { kind: 'screen', screenId: 'traceability-viewer', label: 'Traceability', icon: 'timeline' },
+  { kind: 'screen', screenId: 'inventory-period-report', label: 'Daily / Weekly / Monthly', icon: 'calendar_month' },
 ];
 
 function toDateInput(date: Date): string {
@@ -161,9 +179,48 @@ export default function InventoryReportsPage() {
         <p>Catch-all stock picture in plain words — by item, by store, and what moved</p>
       </div>
 
-      <div className="panel">
-        <div className="toolbar" style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+      <div className="ir-shell">
+        {/* One nav, one place to start from — replaces the old toolbar-buttons
+            row plus a separate tab-strip row below it. A horizontal, wrapping
+            button row above the content (sticky while scrolling). An item
+            either switches the view below, or opens a full separate tab
+            (marked with the "open in new" glyph) for content that doesn't
+            fit as a sub-view — see .ir-rail in main.css. */}
+        <nav className="panel ir-rail" aria-label="Inventory Reports sections">
+          {NAV_ITEMS.map((item) => {
+            const active = item.kind === 'tab' && tab === item.key;
+            return (
+              <button
+                key={item.kind === 'tab' ? item.key : item.screenId}
+                className={active ? 'btn on' : 'btn'}
+                onClick={() =>
+                  item.kind === 'tab'
+                    ? setTab(item.key)
+                    : openScreenTab(item.screenId, item.label, item.icon)
+                }
+                style={{
+                  justifyContent: 'flex-start',
+                  ...(active ? { background: 'var(--btn-primary, #1d2b53)', color: '#fff' } : undefined),
+                }}
+              >
+                <span className="material-symbols-rounded">{item.icon}</span>
+                {item.label}
+                {item.kind === 'screen' && (
+                  <span
+                    className="material-symbols-rounded"
+                    style={{ marginLeft: 'auto', fontSize: 15, opacity: 0.55 }}
+                    aria-label="Opens in a new tab"
+                  >
+                    open_in_new
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </nav>
+
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div className="panel" style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px', marginBottom: 16 }}>
             <span style={{ fontSize: '13px', fontWeight: 600, color: 'var(--muted)' }}>Time Period:</span>
             <select
               className="in"
@@ -178,87 +235,6 @@ export default function InventoryReportsPage() {
               ))}
             </select>
           </div>
-
-          <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-            <button
-              className="btn"
-              onClick={() =>
-                openScreenTab('inventory-log', 'Inventory Log', 'menu_book')
-              }
-            >
-              <span className="material-symbols-rounded">menu_book</span>
-              Inventory Log
-            </button>
-
-            <button
-              className="btn"
-              onClick={() =>
-                openScreenTab('current-stock', 'Current Stock', 'inventory')
-              }
-            >
-              <span className="material-symbols-rounded">inventory</span>
-              Current Stock
-            </button>
-
-            <button
-              className="btn"
-              onClick={() =>
-                openScreenTab('store-stock-summary', 'Store-wise Stock', 'warehouse')
-              }
-            >
-              <span className="material-symbols-rounded">warehouse</span>
-              Store-wise Stock
-            </button>
-
-            <button
-              className="btn"
-              onClick={() =>
-                openScreenTab('traceability-viewer', 'Traceability Viewer', 'timeline')
-              }
-            >
-              <span className="material-symbols-rounded">timeline</span>
-              Traceability
-            </button>
-
-            <button
-              className="btn"
-              onClick={() =>
-                openScreenTab('inventory-period-report', 'Daily / Weekly / Monthly', 'calendar_month')
-              }
-            >
-              <span className="material-symbols-rounded">calendar_month</span>
-              Daily / Weekly / Monthly
-            </button>
-          </div>
-        </div>
-
-        <div
-          style={{
-            display: 'flex',
-            gap: '6px',
-            flexWrap: 'wrap',
-            marginTop: '14px',
-            paddingTop: '14px',
-            borderTop: '1px solid var(--line, #e6e8eb)',
-          }}
-        >
-          {TABS.map((item) => (
-            <button
-              key={item.key}
-              className={tab === item.key ? 'btn on' : 'btn'}
-              onClick={() => setTab(item.key)}
-              style={
-                tab === item.key
-                  ? { background: 'var(--btn-primary, #1d2b53)', color: '#fff' }
-                  : undefined
-              }
-            >
-              <span className="material-symbols-rounded">{item.icon}</span>
-              {item.label}
-            </button>
-          ))}
-        </div>
-      </div>
 
       {overviewQuery.isError && tab === 'overview' && (
         <div className="panel">
@@ -288,6 +264,8 @@ export default function InventoryReportsPage() {
           issued={overview?.issued}
           receivedToday={overview?.receivedToday}
           issuedToday={overview?.issuedToday}
+          fromDate={fromDate}
+          toDate={toDate}
         />
       )}
 
@@ -387,15 +365,10 @@ export default function InventoryReportsPage() {
           </div>
         ) : overview ? (
           <>
+            {/* The full low-stock alert list lives only on the Re-order tab now —
+                this screen's "Low Stock" KPI card is the one entry point into it,
+                instead of showing the identical panel on both tabs. */}
             <ReportKpiCards kpis={overview.kpis} onCardClick={handleCardClick} />
-
-            <LowStockAlertPanel
-              items={simpleReportQuery.data?.reorderList ?? []}
-              soonItems={simpleReportQuery.data?.reorderSoonList ?? []}
-              isLoading={simpleReportQuery.isPending}
-              onCreateRequest={handleCreatePurchaseRequest}
-              onViewAll={() => openDrilldownTab('low-stock', 'Low Stock', 'warning')}
-            />
 
             <div className="report-grid">
               <div className="panel">
@@ -513,7 +486,9 @@ export default function InventoryReportsPage() {
                   <span className="material-symbols-rounded">category</span>
                   Stock by Item Group
                 </h2>
-                <button className="btn" onClick={() => openDrilldownTab('current-stock', 'Current Stock', 'inventory')}>
+                {/* Same tab-id as the toolbar's "Current Stock" button (openScreenTab,
+                    not openDrilldownTab) so this never opens a second, identical tab. */}
+                <button className="btn" onClick={() => openScreenTab('current-stock', 'Current Stock', 'inventory')}>
                   <span className="material-symbols-rounded">open_in_new</span>
                   Current Stock
                 </button>
@@ -560,6 +535,8 @@ export default function InventoryReportsPage() {
             </div>
           </>
         ) : null)}
+        </div>
+      </div>
     </>
   );
 }

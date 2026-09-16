@@ -4,8 +4,8 @@ import { useTabs } from '../../../contexts/TabsContext';
 import { useToast } from '../../../contexts/ToastContext';
 import { getScreenComponent } from '../../../config/screenRegistry';
 import {
+  useCurrentStock,
   useDrilldown,
-  useItemStock,
   useReportsOverview,
   useSimpleReport,
   useStockLedger,
@@ -221,7 +221,7 @@ export default function InventoryDashboardPage() {
   const stockSummaryQuery = useStockSummary();
   const simpleReportQuery = useSimpleReport();
   const ledgerQuery = useStockLedger({ page: 0, size: 12, fromDate, toDate });
-  const itemStockQuery = useItemStock({
+  const itemStockQuery = useCurrentStock({
     page: 0,
     size: 200,
     search: search || undefined,
@@ -229,6 +229,7 @@ export default function InventoryDashboardPage() {
     category: category || undefined,
     status: reorderStatus === 'ALL' ? undefined : reorderStatus,
     itemType: itemType || undefined,
+    includeZero: true,
   });
   const storeSummaryQuery = useDrilldown('store-stock-summary', { page: 0, size: 100 });
 
@@ -269,10 +270,10 @@ export default function InventoryDashboardPage() {
 
   const openStoreStockTab = (storeCode: string) => {
     openTab({
-      id: `current-stock-store-${storeCode}`,
-      label: `Stock — ${storeCode}`,
-      icon: 'inventory',
-      component: getScreenComponent('current-stock'),
+      id: `store-detail-${storeCode}`,
+      label: `Store — ${storeCode}`,
+      icon: 'warehouse',
+      component: getScreenComponent('store-detail'),
       props: { initialFilters: { location: storeCode } },
     });
   };
@@ -318,7 +319,7 @@ export default function InventoryDashboardPage() {
       sub: 'Total value in store',
       icon: 'payments',
       color: 'var(--purple)',
-      onClick: () => openDrilldownTab('current-stock', 'Current Stock', 'inventory'),
+      onClick: () => openScreenTab('current-stock', 'Current Stock', 'inventory'),
     },
     {
       label: 'Items in Store',
@@ -326,7 +327,7 @@ export default function InventoryDashboardPage() {
       sub: 'Active item count',
       icon: 'category',
       color: 'var(--blue)',
-      onClick: () => openDrilldownTab('current-stock', 'Current Stock', 'inventory'),
+      onClick: () => openScreenTab('current-stock', 'Current Stock', 'inventory'),
     },
     {
       label: 'Qty On Hand',
@@ -334,7 +335,7 @@ export default function InventoryDashboardPage() {
       sub: 'Total pieces',
       icon: 'inventory_2',
       color: 'var(--blue)',
-      onClick: () => openDrilldownTab('current-stock', 'Current Stock', 'inventory'),
+      onClick: () => openScreenTab('current-stock', 'Current Stock', 'inventory'),
     },
     {
       label: 'Available',
@@ -342,7 +343,7 @@ export default function InventoryDashboardPage() {
       sub: 'Free to issue',
       icon: 'check_circle',
       color: 'var(--green)',
-      onClick: () => openDrilldownTab('current-stock', 'Current Stock', 'inventory'),
+      onClick: () => openScreenTab('current-stock', 'Current Stock', 'inventory'),
     },
     {
       label: 'Low Stock',
@@ -366,7 +367,7 @@ export default function InventoryDashboardPage() {
       sub: 'Open stores',
       icon: 'warehouse',
       color: 'var(--green)',
-      onClick: () => openDrilldownTab('store-stock-summary', 'Store-wise Stock', 'warehouse'),
+      onClick: () => openScreenTab('store-stock-summary', 'Stock by Store', 'warehouse'),
     },
   ];
 
@@ -442,7 +443,7 @@ export default function InventoryDashboardPage() {
           </tbody>
         </table>
 
-        <h2>3. Store-wise Stock</h2>
+        <h2>3. Stock by Store</h2>
         <table style={PRINT_TABLE}>
           <thead>
             <tr>
@@ -483,8 +484,8 @@ export default function InventoryDashboardPage() {
               <tr key={row.id}>
                 <td>{row.itemCode}</td>
                 <td>{row.itemName}</td>
-                <td>{formatNumber(row.totalOnHand)}</td>
-                <td>{formatCurrency(row.totalValue)}</td>
+                <td>{formatNumber(row.onHand)}</td>
+                <td>{formatCurrency(row.value)}</td>
                 <td>{classifyStock({ reorderStatus: row.reorderStatus } as StockLevelRow)}</td>
               </tr>
             ))}
@@ -611,13 +612,13 @@ export default function InventoryDashboardPage() {
             </div>
 
             <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <button className="btn" onClick={() => openDrilldownTab('current-stock', 'Current Stock', 'inventory')}>
+              <button className="btn" onClick={() => openScreenTab('current-stock', 'Current Stock', 'inventory')}>
                 <span className="material-symbols-rounded">inventory</span>
                 Current Stock
               </button>
-              <button className="btn" onClick={() => openDrilldownTab('store-stock-summary', 'Store-wise Stock', 'warehouse')}>
+              <button className="btn" onClick={() => openScreenTab('store-stock-summary', 'Stock by Store', 'warehouse')}>
                 <span className="material-symbols-rounded">warehouse</span>
-                Stores
+                Stock by Store
               </button>
             </div>
           </div>
@@ -689,13 +690,8 @@ export default function InventoryDashboardPage() {
                 <span className="material-symbols-rounded">warehouse</span>
                 Store-wise Comparison
               </h2>
-              <button
-                className="btn"
-                onClick={() => openDrilldownTab('store-stock-summary', 'Store-wise Stock', 'warehouse')}
-              >
-                <span className="material-symbols-rounded">open_in_new</span>
-                View All
-              </button>
+              {/* "View All" removed — redundant with the "Stock by Store" button in the
+                  sticky filter bar above, which opens this exact same screen. */}
             </div>
             {storeSummaryQuery.isPending ? (
               <div className="empty">
@@ -771,10 +767,9 @@ export default function InventoryDashboardPage() {
                   <option value="MANUFACTURING">Manufacturing</option>
                 </select>
               </div>
-              <button className="btn" onClick={() => openDrilldownTab('current-stock', 'Current Stock', 'inventory')}>
-                <span className="material-symbols-rounded">open_in_new</span>
-                View All
-              </button>
+              {/* "View All" removed — it dropped this panel's own search/type filters and
+                  landed on the exact same unfiltered screen as the sticky bar's "Current
+                  Stock" button above. */}
             </div>
           </div>
 
@@ -855,14 +850,14 @@ export default function InventoryDashboardPage() {
                             <div className="mut" style={{ fontSize: 12 }}>{row.specification || '—'}</div>
                           </td>
                           <td><ItemTypeChip type={row.itemType} /></td>
-                          <td className="num">{formatNumber(row.totalOnHand)}</td>
+                          <td className="num">{formatNumber(row.onHand)}</td>
                           <td className="num">
-                            {row.totalReserved > 0 ? (
-                              <span style={{ color: 'var(--yellow)' }}>{formatNumber(row.totalReserved)}</span>
+                            {row.reserved > 0 ? (
+                              <span style={{ color: 'var(--yellow)' }}>{formatNumber(row.reserved)}</span>
                             ) : 0}
                           </td>
-                          <td className="num" style={{ fontWeight: 700, color: row.totalAvailable <= 0 ? 'var(--red)' : undefined }}>
-                            {formatNumber(row.totalAvailable)}
+                          <td className="num" style={{ fontWeight: 700, color: row.available <= 0 ? 'var(--red)' : undefined }}>
+                            {formatNumber(row.available)}
                           </td>
                           <td>
                             {row.perStore.length > 0 ? (
@@ -876,7 +871,7 @@ export default function InventoryDashboardPage() {
                             ) : <span className="mut">—</span>}
                           </td>
                           <td>
-                            <StatusPill status={classifyStock({ onHand: row.totalOnHand, reorderPoint: row.reorderPoint, safetyStock: row.safetyStock, reorderStatus: row.reorderStatus })} />
+                            <StatusPill status={classifyStock({ onHand: row.onHand, reorderPoint: row.reorderPoint, safetyStock: row.safetyStock, reorderStatus: row.reorderStatus })} />
                           </td>
                         </tr>
                         {expanded && (
@@ -886,14 +881,14 @@ export default function InventoryDashboardPage() {
                                 <Detail label="Category" value={row.category} />
                                 <Detail label="Item Group" value={row.itemGroup} />
                                 <Detail label="UOM" value={row.uom} />
-                                <Detail label="Total Value" value={formatCurrency(row.totalValue)} />
+                                <Detail label="Total Value" value={formatCurrency(row.value)} />
                                 <Detail label="Safety Stock" value={formatNumber(row.safetyStock)} />
                                 <Detail label="Reorder Point" value={formatNumber(row.reorderPoint)} />
                                 <Detail label="Reorder Qty" value={row.reorderQty != null ? formatNumber(row.reorderQty) : '—'} />
                                 <Detail label="Max Stock Level" value={formatNumber(row.maxStockLevel)} />
                                 <Detail label="Suggested Order" value={formatNumber(row.suggestedOrderQty)} />
                                 <Detail label="Avg Daily Consumption" value={formatNumber(row.avgDailyConsumption)} />
-                                <Detail label="QC Hold" value={formatNumber(row.totalQcHold)} />
+                                <Detail label="QC Hold" value={formatNumber(row.qcHold)} />
                                 <Detail label="Last In/Out" value={row.lastMovementDate ? formatDate(String(row.lastMovementDate)) : '—'} />
                               </div>
                             </td>

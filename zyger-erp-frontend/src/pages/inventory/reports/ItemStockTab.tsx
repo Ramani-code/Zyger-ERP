@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { masterService } from '../../../services/masterService';
-import { useItemStock } from '../../../hooks/useInventoryReports';
+import { useCurrentStock } from '../../../hooks/useInventoryReports';
 import { inventoryReportsService } from '../../../services/inventoryReportsService';
 import { getApiErrorMessage } from '../../../utils/apiError';
 import { useToast } from '../../../contexts/ToastContext';
@@ -64,18 +64,23 @@ export default function ItemStockTab() {
       status,
       location,
       lowStockOnly,
+      // This tab lists every item's status including out-of-stock ones by
+      // default (unlike the Current Stock dashboard, which hides zero-stock
+      // items unless asked) — includeZero keeps that behavior now that both
+      // screens share the same current-stock endpoint/computation.
+      includeZero: true,
     }),
     [page, search, itemType, status, location, lowStockOnly]
   );
 
-  const { data, isPending, isError, error, refetch } = useItemStock(params);
+  const { data, isPending, isError, error, refetch } = useCurrentStock(params);
 
   const rows = data?.content ?? [];
   const totalElements = data?.totalElements ?? 0;
 
   const handleExport = async (format: 'xlsx' | 'pdf') => {
     try {
-      await inventoryReportsService.exportFile('item-stock', 'Item-wise Stock', params, format);
+      await inventoryReportsService.exportFile('current-stock', 'Item-wise Stock', params, format);
       toast('Item-wise stock export downloaded.');
     } catch (exportError) {
       toast(getApiErrorMessage(exportError, 'Export failed.'), 'error');
@@ -247,11 +252,11 @@ export default function ItemStockTab() {
                       <td>
                         <ItemTypeChip type={row.itemType} />
                       </td>
-                      <td className="num">{formatNumber(row.totalOnHand)}</td>
+                      <td className="num">{formatNumber(row.onHand)}</td>
                       <td className="num">
-                        {row.totalReserved > 0 ? (
+                        {row.reserved > 0 ? (
                           <span style={{ color: 'var(--yellow, #b58900)' }}>
-                            {formatNumber(row.totalReserved)}
+                            {formatNumber(row.reserved)}
                           </span>
                         ) : (
                           0
@@ -261,10 +266,10 @@ export default function ItemStockTab() {
                         className="num"
                         style={{
                           fontWeight: 700,
-                          color: row.totalAvailable <= 0 ? 'var(--red)' : undefined,
+                          color: row.available <= 0 ? 'var(--red)' : undefined,
                         }}
                       >
-                        {formatNumber(row.totalAvailable)}
+                        {formatNumber(row.available)}
                       </td>
                       <td>
                         {row.perStore.length > 0 ? (

@@ -444,13 +444,6 @@ export const NAV_ITEMS: NavTopItem[] = [
           },
           {
             type: 'item',
-            id: 'general-issue',
-            label: 'General Issue',
-            screenId: 'general-issue',
-            tabIcon: 'outbox',
-          },
-          {
-            type: 'item',
             id: 'issue-internal-external',
             label: 'Issue Internal / External',
             icon: 'outbox',
@@ -1436,13 +1429,9 @@ export const NAV_ITEMS: NavTopItem[] = [
     icon: 'monitoring',
     align: 'right',
     children: [
-      {
-        type: 'item',
-        id: 'reports-inventory-reports',
-        label: 'Inventory Reports',
-        icon: 'inventory',
-        screenId: 'reports',
-      },
+      // Inventory Reports lives only in the sidebar (Inventory > Inventory Reports,
+      // screenId 'reports') — this menu used to repeat it under the same screenId,
+      // giving the same screen two identical-looking nav entries.
       {
         type: 'item',
         id: 'work-order-reports',

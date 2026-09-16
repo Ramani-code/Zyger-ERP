@@ -2505,6 +2505,27 @@ textarea.in {
     }
 }
 
+/* Inventory Reports top nav (InventoryReportsPage, StoreDetailPage) — a
+   horizontal, wrapping button row above the content, sticky under the page
+   header so it stays reachable while scrolling. */
+.ir-shell {
+    display: flex;
+    flex-direction: column;
+    gap: 16px
+}
+
+.ir-rail {
+    width: 100%;
+    padding: 8px;
+    display: flex;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 6px;
+    position: sticky;
+    top: 16px;
+    z-index: 2
+}
+
 /* BOM MASTER SCREEN CUSTOM STYLES */
 .bom-container {
     padding: 24px;

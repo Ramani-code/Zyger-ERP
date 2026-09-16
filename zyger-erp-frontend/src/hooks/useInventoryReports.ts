@@ -34,16 +34,6 @@ export function useCurrentStock(params: ReportQueryParams) {
   });
 }
 
-export function useItemStock(params: ReportQueryParams) {
-  return useQuery({
-    queryKey: ['inventory-reports', 'item-stock', params],
-    queryFn: ({ signal }) => inventoryReportsService.getItemStock(params, signal),
-    placeholderData: keepPreviousData,
-    staleTime: 0,
-    retry: 1,
-  });
-}
-
 export function useStoreStock(params: ReportQueryParams) {
   return useQuery({
     queryKey: ['inventory-reports', 'store-stock', params],

@@ -17,6 +17,7 @@ import { getApiErrorMessage } from '../../../utils/apiError';
 import { useToast } from '../../../contexts/ToastContext';
 import StatusBadge from '../../../components/common/StatusBadge';
 import { getScreenComponent } from '../../../config/screenRegistry';
+import StoreValueBarChart from './charts/StoreValueBarChart';
 
 const PAGE_SIZE = 10;
 
@@ -77,15 +78,15 @@ export default function DrilldownPage({ drilldownType, initialFilters }: Drilldo
     });
   };
 
-  /** FR-INV-STORE-3 — a store row drills into Current Stock, filtered to that store. */
+  /** FR-INV-STORE-3 — a store row drills into its dedicated Store Detail page. */
   const openStoreDetail = (row: Record<string, unknown>) => {
     const storeCode = String(row.storeCode ?? '');
     if (!storeCode) return;
     openTab({
-      id: `current-stock-store-${storeCode}`,
-      label: `Stock — ${storeCode}`,
-      icon: 'inventory',
-      component: getScreenComponent('current-stock'),
+      id: `store-detail-${storeCode}`,
+      label: `Store — ${String(row.storeName ?? storeCode)}`,
+      icon: 'warehouse',
+      component: getScreenComponent('store-detail'),
       props: { initialFilters: { location: storeCode } },
     });
   };
@@ -414,6 +415,17 @@ export default function DrilldownPage({ drilldownType, initialFilters }: Drilldo
           </div>
         ) : (
           <>
+            {drilldownType === 'store-stock-summary' && rows.length > 1 && (
+              <div style={{ padding: '12px 4px 4px' }}>
+                <StoreValueBarChart
+                  data={rows.map((r) => ({
+                    storeCode: String(r.storeCode ?? ''),
+                    storeName: String(r.storeName ?? r.storeCode ?? ''),
+                    totalValue: Number(r.totalValue ?? 0),
+                  }))}
+                />
+              </div>
+            )}
             <div className="twrap">
               <table className="tbl">
                 <thead>

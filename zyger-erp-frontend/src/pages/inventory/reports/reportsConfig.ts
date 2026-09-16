@@ -142,7 +142,7 @@ export const DRILLDOWN_CONFIGS: Record<string, DrilldownConfig> = {
 
   'store-stock-summary': {
     type: 'store-stock-summary',
-    title: 'Store-wise Stock',
+    title: 'Stock by Store',
     subtitle: 'On hand / reserved / available, aggregated per store',
     icon: 'warehouse',
     columns: [

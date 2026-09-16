@@ -144,6 +144,10 @@ public class ExportService {
             zip.write(sheet.toString().getBytes(StandardCharsets.UTF_8)); zip.closeEntry();
             zip.putNextEntry(new ZipEntry("xl/styles.xml"));
             zip.write(styles.getBytes(StandardCharsets.UTF_8)); zip.closeEntry();
+            // finish() flushes the ZIP central directory into baos; without it the returned
+            // bytes are captured before try-with-resources closes zip, so every export was a
+            // truncated archive with no central directory (unreadable by Excel/openpyxl/unzip).
+            zip.finish();
             return baos.toByteArray();
         } catch (Exception e) {
             throw new IllegalStateException("XLSX export failed");

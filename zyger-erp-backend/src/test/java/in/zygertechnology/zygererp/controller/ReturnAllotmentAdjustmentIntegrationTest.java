@@ -407,6 +407,45 @@ class ReturnAllotmentAdjustmentIntegrationTest extends AbstractPostgresIntegrati
     }
 
     @Test
+    @DisplayName("RM Issue: posting reduces on-hand stock by the issued quantity")
+    void testRmIssuePostingReducesStock() throws Exception {
+        seedStock("ITEM-RMI-001", "MAIN", 100.0);
+        assertEquals(100.0, stockService.onHand("ITEM-RMI-001", "MAIN", null), 0.0001);
+
+        Long id = createWorkflowAndPost("/api/inventory/stock-issue/rm-issue", Map.of(
+                "docDate", java.time.LocalDate.now().toString(),
+                "sourceLocation", "MAIN",
+                "lines", List.of(Map.of("itemCode", "ITEM-RMI-001", "location", "MAIN", "issueQty", 30.0))
+        ));
+
+        assertEquals(70.0, stockService.onHand("ITEM-RMI-001", "MAIN", null), 0.0001);
+        assertEquals(70.0, stockService.available("ITEM-RMI-001", "MAIN"), 0.0001);
+
+        mockMvc.perform(get("/api/inventory/stock-issue/rm-issue/" + id)
+                        .header("Authorization", bearer(adminToken())))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("POSTED"));
+    }
+
+    @Test
+    @DisplayName("Issue Internal/External: posting reduces on-hand stock by the issued quantity")
+    void testIssueInternalExternalPostingReducesStock() throws Exception {
+        seedStock("ITEM-IIE-001", "MAIN", 50.0);
+        assertEquals(50.0, stockService.onHand("ITEM-IIE-001", "MAIN", null), 0.0001);
+
+        createWorkflowAndPost("/api/inventory/stock-issue/issue-internal-external", Map.of(
+                "docDate", java.time.LocalDate.now().toString(),
+                "issueType", "INTERNAL",
+                "sourceLocation", "MAIN",
+                "toDepartment", "Production",
+                "lines", List.of(Map.of("itemCode", "ITEM-IIE-001", "location", "MAIN", "issueQty", 12.0))
+        ));
+
+        assertEquals(38.0, stockService.onHand("ITEM-IIE-001", "MAIN", null), 0.0001);
+        assertEquals(38.0, stockService.available("ITEM-IIE-001", "MAIN"), 0.0001);
+    }
+
+    @Test
     @DisplayName("Reports: all 12 Return + Allotment/Adjustment report endpoints return arrays")
     void testAllReports() throws Exception {
         // Return Management (6)

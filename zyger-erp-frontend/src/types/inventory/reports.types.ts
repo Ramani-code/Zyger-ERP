@@ -166,11 +166,11 @@ export interface ItemStockRow {
   itemGroup: string;
   category: string;
   uom: string;
-  totalOnHand: number;
-  totalReserved: number;
-  totalQcHold: number;
-  totalAvailable: number;
-  totalValue: number;
+  onHand: number;
+  reserved: number;
+  qcHold: number;
+  available: number;
+  value: number;
   safetyStock: number;
   reorderPoint: number;
   maxStockLevel: number;
