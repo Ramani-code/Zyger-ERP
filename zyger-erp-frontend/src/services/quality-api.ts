@@ -6,6 +6,7 @@ import type {
   InspectionListParams,
   InspectionListRowDto,
   DecisionInput,
+  DecisionQuantitiesPayload,
   NcrCreatePayload,
   NcrDto,
   CharacteristicLinePayload,
@@ -38,8 +39,22 @@ export const qualityApi = {
     return response.data;
   },
 
+  async createInspectionFromInward(payload: { sourceDocKey: string; sourceDocId: number }): Promise<{
+    inspectionId: number | null;
+    inspectionIds: number[];
+    inspections: InspectionDto[];
+  }> {
+    const response = await apiClient.post('/v1/quality/inspections/from-inward', payload);
+    return response.data;
+  },
+
   async updateInspection(id: number | string, payload: InspectionCreatePayload): Promise<InspectionDto> {
     const response = await apiClient.put<InspectionDto>(`/v1/quality/inspections/${id}`, payload);
+    return response.data;
+  },
+
+  async updateDecisionQuantities(id: number | string, payload: DecisionQuantitiesPayload): Promise<InspectionDto> {
+    const response = await apiClient.put<InspectionDto>(`/v1/quality/inspections/${id}/decision-quantities`, payload);
     return response.data;
   },
 

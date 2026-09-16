@@ -54,6 +54,29 @@ public class QualityController {
         return docs.toRow(e);
     }
 
+    // Inward → QC deferral: the Inspection Pending queue's Process action calls this to
+    // create the Quality Inspection (and allocate its IQC/LO/JOMIN number) on demand from a
+    // QC-required inward document that was posted to QC_HOLD but has no inspection yet.
+    @PostMapping("/inspections/from-inward")
+    @RequirePermission(module = "QUALITY", screen = "*", action = "EDIT")
+    public Map<String, Object> createInspectionFromInward(@RequestBody Map<String, Object> body, Principal p) {
+        String key = String.valueOf(body.get("sourceDocKey"));
+        Object idObj = body.get("sourceDocId");
+        if (key == null || key.isBlank() || idObj == null) {
+            throw new IllegalArgumentException("sourceDocKey and sourceDocId are required");
+        }
+        Long id = ((Number) idObj).longValue();
+        List<Long> ids = docs.createInspectionsFromInward(key, id, principalName(p));
+        List<Map<String, Object>> inspections = ids.stream()
+                .map(i -> docs.toRow(quality.get(i)))
+                .toList();
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("inspectionId", ids.isEmpty() ? null : ids.get(0));
+        out.put("inspectionIds", ids);
+        out.put("inspections", inspections);
+        return out;
+    }
+
     @GetMapping("/inspections/{id}")
     public Map<String, Object> getInspection(@PathVariable Long id) {
         return quality.getRow(id);
@@ -72,6 +95,19 @@ public class QualityController {
         return docs.toRow(docs.update(QualityInspectionService.KEY, id, merged, principalName(p)));
     }
 
+    // Narrower than PUT /inspections/{id}: that one requires DRAFT/REJECTED and replaces the
+    // whole lines/characteristics collection. This just saves Accepted/Rejected/Rework/Hold
+    // qty and Store Location — what the Inspection Pending "Process" screen actually edits —
+    // and stays usable through SUBMITTED/HOLD/PASS/FAIL, right up to the Approve click that
+    // reads these values back out to decide what actually posts to stock.
+    @PutMapping("/inspections/{id}/decision-quantities")
+    @RequirePermission(module = "QUALITY", screen = "*", action = "EDIT")
+    public Map<String, Object> updateDecisionQuantities(@PathVariable Long id,
+                                                        @RequestBody Map<String, Object> body,
+                                                        Principal p) {
+        return docs.toRow(quality.updateDecisionFields(id, body, principalName(p)));
+    }
+
     @DeleteMapping("/inspections/{id}")
     public void deleteInspection(@PathVariable Long id, Principal p) {
         // generic engine gates to DRAFT/REJECTED
@@ -85,10 +121,10 @@ public class QualityController {
                 in.zygertechnology.zygererp.entity.QualityInspectionType type =
                     in.zygertechnology.zygererp.entity.QualityInspectionType.valueOf(inspectionType.toUpperCase());
                 String prefix = QualityInspectionService.prefixForType(type);
-                return Map.of("nextNumber", docs.peekNumberFy(prefix));
+                return Map.of("nextNumber", docs.peekNumber(QualityInspectionService.KEY, prefix));
             } catch (Exception ignored) {}
         }
-        return Map.of("nextNumber", docs.peekNumberFy(QualityInspectionService.prefixForType(null)));
+        return Map.of("nextNumber", docs.peekNumber(QualityInspectionService.KEY, QualityInspectionService.prefixForType(null)));
     }
 
     // ---------- Workflow actions (spec 6.4) ----------
@@ -135,6 +171,12 @@ public class QualityController {
         String minorReason = body != null && body.get("minorAcceptanceReason") != null
                 ? String.valueOf(body.get("minorAcceptanceReason")) : null;
         return docs.toRow(quality.approve(id, minorReason, principalName(p)));
+    }
+
+    @PostMapping("/inspections/{id}/update-inventory")
+    @RequirePermission(module = "QUALITY", screen = "*", action = "APPROVE")
+    public Map<String, Object> updateInventory(@PathVariable Long id, Principal p) {
+        return docs.toRow(quality.updateInventory(id, principalName(p)));
     }
 
     @PostMapping("/inspections/{id}/hold")
@@ -277,10 +319,9 @@ public class QualityController {
 
     @GetMapping("/inspection-pending/count")
     public Map<String, Object> pendingCount(@RequestParam Map<String, String> q) {
-        Map<String, String> copy = new HashMap<>(q);
-        copy.put("status", "PENDING");
-        Map<String, Object> page = quality.list(copy);
-        return Map.of("count", page.get("totalElements"));
+        long count = countPending(q.get("inspectionType"), q.get("priority"), q.get("inspector"), q.get("itemCode"));
+        count += waitingQcRows(q.get("inspectionType"), q.get("priority"), q.get("inspector"), q.get("itemCode")).size();
+        return Map.of("count", count);
     }
 
     @GetMapping("/inspection-pending")
@@ -320,15 +361,37 @@ public class QualityController {
         query.setMaxResults(size);
         List<QualityInspection> results = query.getResultList();
 
-        long total = countPending(inspectionType, priority, inspector, itemCode);
+        // QC-required inwards posted to QC_HOLD that have no inspection created yet are
+        // deferred-creation items; they show here until Process creates their inspection.
+        List<Map<String, Object>> awaiting = waitingQcRows(inspectionType, priority, inspector, itemCode);
+
+        long total = countPending(inspectionType, priority, inspector, itemCode) + awaiting.size();
+
+        List<Map<String, Object>> content = new ArrayList<>(results.stream().map(docs::toRow).toList());
+        content.addAll(awaiting);
 
         Map<String, Object> out = new LinkedHashMap<>();
-        out.put("content", results.stream().map(docs::toRow).toList());
+        out.put("content", content);
         out.put("totalElements", total);
         out.put("page", page);
         out.put("size", size);
         out.put("totalPages", (total + size - 1) / size);
         return out;
+    }
+
+    private List<Map<String, Object>> waitingQcRows(String inspectionType, String priority,
+                                                    String inspector, String itemCode) {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (String k : List.of("po-inward", "lo-inward", "jo-inward", "general-inward", "grn")) {
+            for (Map<String, Object> row : docs.awaitingQcDocRows(k)) {
+                if (inspectionType != null && !inspectionType.isBlank()
+                        && !inspectionType.equalsIgnoreCase(String.valueOf(row.get("inspectionType")))) continue;
+                if (itemCode != null && !itemCode.isBlank()
+                        && !itemCode.equalsIgnoreCase(String.valueOf(row.get("itemCode")))) continue;
+                rows.add(row);
+            }
+        }
+        return rows;
     }
 
     private long countPending(String inspectionType, String priority, String inspector, String itemCode) {

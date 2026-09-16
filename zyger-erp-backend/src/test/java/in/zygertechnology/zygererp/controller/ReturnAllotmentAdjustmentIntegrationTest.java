@@ -382,6 +382,31 @@ class ReturnAllotmentAdjustmentIntegrationTest extends AbstractPostgresIntegrati
     }
 
     @Test
+    @DisplayName("Current Stock: one item code across multiple batches/heats/stores collapses to a single row")
+    void testCurrentStockCollapsesMultipleBatchesIntoOneRow() throws Exception {
+        seedStoreLocation("MAIN");
+        seedStoreLocation("STORE-01");
+        stockService.recordStockIn("BATCH-A", "stock-in", "STOCK_IN", "ITEM-MULTI-001",
+                "MAIN", "B1", null, java.math.BigDecimal.valueOf(100.0),
+                java.time.LocalDate.now(), "system", "FREE");
+        stockService.recordStockIn("BATCH-B", "stock-in", "STOCK_IN", "ITEM-MULTI-001",
+                "MAIN", "B2", null, java.math.BigDecimal.valueOf(50.0),
+                java.time.LocalDate.now(), "system", "FREE");
+        stockService.recordStockIn("BATCH-C", "stock-in", "STOCK_IN", "ITEM-MULTI-001",
+                "STORE-01", "B3", null, java.math.BigDecimal.valueOf(25.0),
+                java.time.LocalDate.now(), "system", "FREE");
+
+        mockMvc.perform(get("/api/inventory/reports/current-stock")
+                        .header("Authorization", bearer(adminToken()))
+                        .param("itemCode", "ITEM-MULTI-001"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.content.length()").value(1))
+                .andExpect(jsonPath("$.content[0].itemCode").value("ITEM-MULTI-001"))
+                .andExpect(jsonPath("$.content[0].onHand").value(175.0))
+                .andExpect(jsonPath("$.content[0].available").value(175.0));
+    }
+
+    @Test
     @DisplayName("Reports: all 12 Return + Allotment/Adjustment report endpoints return arrays")
     void testAllReports() throws Exception {
         // Return Management (6)

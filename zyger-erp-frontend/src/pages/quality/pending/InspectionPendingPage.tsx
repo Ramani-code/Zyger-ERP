@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import apiClient from '../../../api/axiosClient';
+import { qualityApi } from '../../../services/quality-api';
 import { useToast } from '../../../contexts/ToastContext';
 import { getApiErrorMessage } from '../../../utils/apiError';
 import { useTabs } from '../../../contexts/TabsContext';
@@ -7,7 +8,7 @@ import { getScreenComponent } from '../../../config/screenRegistry';
 import StatusBadge from '../../../components/common/StatusBadge';
 
 interface PendingInspection {
-  id: number;
+  id: number | null;
   inspectionNumber: string;
   inspectionType: string;
   itemCode: string;
@@ -22,6 +23,9 @@ interface PendingInspection {
   dueDate: string;
   createdAt: string;
   isLocked: boolean;
+  pendingFromInward?: boolean;
+  sourceDocKey?: string;
+  sourceDocId?: number;
 }
 
 interface GateCheck {
@@ -51,6 +55,7 @@ export default function InspectionPendingPage() {
   const [loading, setLoading] = useState(true);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
+  const [processingId, setProcessingId] = useState<number | null>(null);
   const [gateCheck, setGateCheck] = useState<GateCheck | null>(null);
 
   const [typeFilter, setTypeFilter] = useState('');
@@ -96,6 +101,41 @@ export default function InspectionPendingPage() {
       component: getScreenComponent('quality-inspection'),
       props: { initialDocId: id },
     });
+  };
+
+  const processAwaitingInward = async (row: PendingInspection) => {
+    if (!row.sourceDocKey || row.sourceDocId == null) {
+      return;
+    }
+    setProcessingId(row.sourceDocId);
+    try {
+      const result = await qualityApi.createInspectionFromInward({
+        sourceDocKey: row.sourceDocKey,
+        sourceDocId: row.sourceDocId,
+      });
+      const id = result.inspectionId;
+      if (id == null) {
+        toast('No inspection created — verify the inward has QC-required lines.', 'error');
+        return;
+      }
+      const created = result.inspections?.[0];
+      openTab({
+        id: `quality-inspection-${id}`,
+        label: created?.docNo ? `Inspection ${created.docNo}` : `Inspection ${id}`,
+        icon: 'fact_check',
+        component: getScreenComponent('quality-inspection'),
+        props: { initialDocId: id },
+      });
+      toast(
+        `✅ ${created?.inspectionType ?? 'Inspection'} created for ${row.sourceNumber} — enter quantities and Save.`,
+        'success'
+      );
+      load();
+    } catch (createError) {
+      toast(getApiErrorMessage(createError, 'Could not create inspection.'), 'error');
+    } finally {
+      setProcessingId(null);
+    }
   };
 
   return (
@@ -156,9 +196,15 @@ export default function InspectionPendingPage() {
             {rows.length === 0 && <tr><td colSpan={10} style={{ textAlign: 'center', padding: 24, color: '#999' }}>No pending inspections</td></tr>}
             {rows.map((r) => {
               const pc = PRIORITY_COLORS[r.priority] ?? PRIORITY_COLORS.Normal;
+              const awaiting = Boolean(r.pendingFromInward);
+              const rowKey = awaiting ? `aw-${r.sourceDocKey}-${r.sourceDocId}` : `qc-${r.id}`;
+              const busy = awaiting && processingId === r.sourceDocId;
               return (
-                <tr key={r.id} style={{ background: r.isLocked ? '#fef9ee' : undefined }}>
-                  <td><strong>{r.inspectionNumber}</strong></td>
+                <tr key={rowKey} style={{ background: awaiting ? '#f0f5ff' : r.isLocked ? '#fef9ee' : undefined }}>
+                  <td>
+                    <strong>{r.inspectionNumber}</strong>
+                    {awaiting && <div style={{ fontSize: 11, color: '#2563eb' }}>Awaiting creation</div>}
+                  </td>
                   <td>{TYPE_LABELS[r.inspectionType] ?? r.inspectionType}</td>
                   <td>{r.itemCode}</td>
                   <td>{r.poInwardNumber || r.sourceNumber}</td>
@@ -169,10 +215,29 @@ export default function InspectionPendingPage() {
                   </td>
                   <td>{r.inspector || '-'}</td>
                   <td>{r.receivedQuantity}</td>
-                  <td><StatusBadge status={r.inspectionStatus} /></td>
+                  <td>
+                    {awaiting ? (
+                      <span style={{ background: '#dbeafe', color: '#1d4ed8', padding: '2px 8px', borderRadius: 4, fontSize: 11, fontWeight: 600 }}>
+                        AWAITING
+                      </span>
+                    ) : (
+                      <StatusBadge status={r.inspectionStatus} />
+                    )}
+                  </td>
                   <td style={{ fontSize: 12 }}>{r.dueDate || '-'}</td>
                   <td>
-                    <button className="btn primary" onClick={() => openInspection(r.id)} style={{ fontSize: 12 }}>Process</button>
+                    {awaiting ? (
+                      <button
+                        className="btn primary"
+                        onClick={() => processAwaitingInward(r)}
+                        disabled={busy || loading}
+                        style={{ fontSize: 12 }}
+                      >
+                        {busy ? 'Creating...' : 'Process'}
+                      </button>
+                    ) : (
+                      <button className="btn primary" onClick={() => openInspection(r.id!)} style={{ fontSize: 12 }}>Process</button>
+                    )}
                   </td>
                 </tr>
               );

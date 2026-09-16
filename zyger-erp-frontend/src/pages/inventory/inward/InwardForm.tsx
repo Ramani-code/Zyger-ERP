@@ -470,7 +470,7 @@ export default function InwardForm({
         tax: line.tax ? toNumber(line.tax) : undefined,
         taxAmount: line.taxAmount ? toNumber(line.taxAmount) : undefined,
         netAmount: line.netAmount ? toNumber(line.netAmount) : undefined,
-        acceptedQty: line.acceptedQty ? toNumber(line.acceptedQty) : undefined,
+        acceptedQty: String(line.acceptedQty ?? '').trim() !== '' ? toNumber(line.acceptedQty) : undefined,
         rejectedQty: line.rejectedQty ? toNumber(line.rejectedQty) : undefined,
         rejectedReason: line.rejectedReason || undefined,
         batchNo: line.batchNo || undefined,
@@ -559,7 +559,6 @@ export default function InwardForm({
             });
           }
           toast(`⚠️ Received into QC Hold — ${saved.docNo ?? docNo} stock is held pending Quality Inspection (IQC).`, 'success');
-          window.location.hash = '#/inward-inspection-iqc';
         } else {
           // Direct Store Addition - bypass QC
           saved = await mutations.actionMutation.mutateAsync({
@@ -587,7 +586,12 @@ export default function InwardForm({
         status: saved.status || (submit ? 'SUBMITTED' : 'DRAFT'),
       });
 
-      if (saved.id) {
+      // Send to QC stays on this screen — the receipt isn't done yet, it's just waiting on
+      // Quality Inspection, so bouncing the user back to the Inward Entry dashboard here would
+      // read as if the task finished. Save Draft and the no-QC direct-post path still return
+      // to the dashboard as before.
+      const sentToQc = submit && (header.qcRequired === 'Yes' || header.qcRequired === 'Y' || header.qcRequired === 'true');
+      if (saved.id && !sentToQc) {
         onSaved?.(saved.id);
       }
     } catch (saveError) {

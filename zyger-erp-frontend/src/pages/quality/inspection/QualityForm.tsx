@@ -4,6 +4,7 @@ import apiClient from '../../../api/axiosClient';
 import {
   useQualityInspection,
   useQualityInspectionCreate,
+  useQualityDecisionQuantitiesUpdate,
   useQualitySaveMeasurements,
   useQualityWorkflow,
 } from '../../../hooks/useQuality';
@@ -220,6 +221,7 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
   const inspection = documentQuery.data;
 
   const createMutation = useQualityInspectionCreate();
+  const decisionQuantitiesMutation = useQualityDecisionQuantitiesUpdate();
   const measurementsMutation = useQualitySaveMeasurements();
   const workflowMutation = useQualityWorkflow();
   const ncrCreateMutation = useQualityNcrCreate();
@@ -615,30 +617,6 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
     }
   };
 
-  const handleSaveMeasurements = async () => {
-    if (!documentId || !inspection) {
-      return;
-    }
-
-    const payloadLines = payloadFromDraftLines(draftLines);
-
-    if (payloadLines.length === 0) {
-      toast('Add at least one characteristic with a code.', 'error');
-      return;
-    }
-
-    try {
-      await measurementsMutation.mutateAsync({
-        id: documentId,
-        lines: payloadLines,
-      });
-
-      toast(`${inspection.docNo ?? 'Inspection'} measurements saved and re-evaluated.`);
-    } catch (saveError) {
-      toast(getApiErrorMessage(saveError, 'Save measurements failed.'), 'error');
-    }
-  };
-
   const runWorkflow = async (
     action: Parameters<typeof workflowMutation.mutateAsync>[0]['action'],
     remarks?: string,
@@ -649,6 +627,27 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
     }
 
     try {
+      // Persist Accepted/Rejected/Rework/Hold Qty and Store Location before advancing the
+      // workflow — these are typed on this screen and are exactly what the release posts to
+      // stock, but nothing else saves them. Without this, approve() acted on stale/empty
+      // server-side values and released the full inspected qty instead of just what was
+      // accepted. Narrower than the generic update endpoint on purpose: that one replaces
+      // the whole characteristics/lines collection and requires DRAFT/REJECTED, so it can't
+      // be reused here without either wiping evaluated results or blocking on SUBMITTED.
+      if (!viewOnly) {
+        await decisionQuantitiesMutation.mutateAsync({
+          id: documentId,
+          payload: {
+            acceptedQuantity: toOptionalNumber(header.acceptedQuantity),
+            rejectedQuantity: toOptionalNumber(header.rejectedQuantity),
+            reworkQuantity: toOptionalNumber(header.reworkQuantity),
+            holdQuantity: toOptionalNumber(header.holdQuantity),
+            location: header.location.trim() || undefined,
+            remarks: header.remarks.trim() || undefined,
+          },
+        });
+      }
+
       const updated = await workflowMutation.mutateAsync({
         id: documentId,
         action,
@@ -673,6 +672,43 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
       case 'close': runWorkflow('close'); break;
       case 'cancel': runWorkflow('cancel'); break;
       case 'reopen': runWorkflow('reopen'); break;
+    }
+  };
+
+  const runUpdateInventory = async () => {
+    if (!documentId || !inspection) {
+      return;
+    }
+    try {
+      if (!viewOnly) {
+        const payloadLines = payloadFromDraftLines(draftLines);
+        if (payloadLines.length > 0) {
+          await measurementsMutation.mutateAsync({
+            id: documentId,
+            lines: payloadLines,
+          });
+        }
+        await decisionQuantitiesMutation.mutateAsync({
+          id: documentId,
+          payload: {
+            acceptedQuantity: toOptionalNumber(header.acceptedQuantity),
+            rejectedQuantity: toOptionalNumber(header.rejectedQuantity),
+            reworkQuantity: toOptionalNumber(header.reworkQuantity),
+            holdQuantity: toOptionalNumber(header.holdQuantity),
+            location: header.location.trim() || undefined,
+            remarks: header.remarks.trim() || undefined,
+          },
+        });
+      }
+      const updated = await apiClient.post(`/v1/quality/inspections/${documentId}/update-inventory`, {});
+      const accepted = toOptionalNumber(header.acceptedQuantity);
+      toast(
+        `${(updated.data?.docNo ?? 'Inspection')} • inventory updated — only the accepted qty${accepted ? ` (${accepted})` : ''} was released.`,
+        'success'
+      );
+      documentQuery.refetch();
+    } catch (actionError) {
+      toast(getApiErrorMessage(actionError, 'Update Inventory failed.'), 'error');
     }
   };
 
@@ -853,7 +889,7 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
                   className="in"
                   placeholder="Enter ref doc no to auto-fill..."
                   value={header.referenceDocNo}
-                  readOnly={!isCreateMode}
+                  readOnly={!isCreateMode && !measurementsEditable}
                   onChange={(event) => updateReferenceDocNo(event.target.value)}
                 />
               )}
@@ -865,7 +901,7 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
                 className="in"
                 placeholder="e.g. PO-2026-0089"
                 value={header.purchaseOrderNumber}
-                readOnly={!isCreateMode}
+                readOnly={!isCreateMode && !measurementsEditable}
                 onChange={(event) =>
                   setHeader((current) => ({ ...current, purchaseOrderNumber: event.target.value }))
                 }
@@ -882,7 +918,7 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
                     ? `${header.partyCode} • ${header.partyName}`
                     : header.partyName || header.partyCode
                 }
-                readOnly={!isCreateMode}
+                readOnly={!isCreateMode && !measurementsEditable}
                 onChange={(event) => {
                   const val = event.target.value;
                   setHeader((current) => ({ ...current, partyName: val }));
@@ -896,7 +932,7 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
                 className="in"
                 placeholder="e.g. INV-8821 / DC-4091"
                 value={header.supplierChallanNo}
-                readOnly={!isCreateMode}
+                readOnly={!isCreateMode && !measurementsEditable}
                 onChange={(event) =>
                   setHeader((current) => ({ ...current, supplierChallanNo: event.target.value }))
                 }
@@ -909,7 +945,7 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
                 className="in"
                 placeholder="e.g. SS304, AL6061-T6, EN8"
                 value={header.materialGrade}
-                readOnly={!isCreateMode}
+                readOnly={!isCreateMode && !measurementsEditable}
                 onChange={(event) =>
                   setHeader((current) => ({ ...current, materialGrade: event.target.value }))
                 }
@@ -923,7 +959,7 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
                   type="checkbox"
                   id="mtcVerifiedCheck"
                   checked={header.mtcVerified}
-                  disabled={!isCreateMode}
+                  disabled={!isCreateMode && !measurementsEditable}
                   onChange={(event) =>
                     setHeader((current) => ({ ...current, mtcVerified: event.target.checked }))
                   }
@@ -940,7 +976,7 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
                 className="in"
                 placeholder="e.g. MTC-2026-904"
                 value={header.mtcNumber}
-                readOnly={!isCreateMode}
+                readOnly={!isCreateMode && !measurementsEditable}
                 onChange={(event) =>
                   setHeader((current) => ({ ...current, mtcNumber: event.target.value }))
                 }
@@ -952,7 +988,7 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
               <select
                 className="in"
                 value={header.ndtStatus}
-                disabled={!isCreateMode}
+                disabled={!isCreateMode && !measurementsEditable}
                 onChange={(event) =>
                   setHeader((current) => ({ ...current, ndtStatus: event.target.value }))
                 }
@@ -971,7 +1007,7 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
               <input
                 className="in"
                 value={header.itemCode}
-                readOnly={!isCreateMode}
+                readOnly={!isCreateMode && !measurementsEditable}
                 onChange={(event) => updateItemCode(event.target.value)}
               />
             </label>
@@ -984,7 +1020,7 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
                 className="in"
                 placeholder="Enter item name..."
                 value={header.itemDescription}
-                readOnly={!isCreateMode}
+                readOnly={!isCreateMode && !measurementsEditable}
                 onChange={(event) =>
                   setHeader((current) => ({ ...current, itemDescription: event.target.value }))
                 }
@@ -998,7 +1034,7 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
               <select
                 className="in"
                 value={header.location}
-                disabled={!isCreateMode}
+                disabled={!isCreateMode && !measurementsEditable}
                 onChange={(event) =>
                   setHeader((current) => ({ ...current, location: event.target.value }))
                 }
@@ -1020,7 +1056,7 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
                 type="number"
                 className="in"
                 value={header.receivedQuantity}
-                readOnly={!isCreateMode}
+                readOnly={!isCreateMode && !measurementsEditable}
                 onChange={(event) =>
                   setHeader((current) => ({ ...current, receivedQuantity: event.target.value }))
                 }
@@ -1035,7 +1071,7 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
                 type="number"
                 className="in"
                 value={header.inspectionQuantity}
-                readOnly={!isCreateMode}
+                readOnly={!isCreateMode && !measurementsEditable}
                 onChange={(event) =>
                   setHeader((current) => ({ ...current, inspectionQuantity: event.target.value }))
                 }
@@ -1052,7 +1088,7 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
               <input
                 className="in"
                 value={header.lotNumber}
-                readOnly={!isCreateMode}
+                readOnly={!isCreateMode && !measurementsEditable}
                 onChange={(event) =>
                   setHeader((current) => ({ ...current, lotNumber: event.target.value }))
                 }
@@ -1064,7 +1100,7 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
               <input
                 className="in"
                 value={header.batchNumber}
-                readOnly={!isCreateMode}
+                readOnly={!isCreateMode && !measurementsEditable}
                 onChange={(event) =>
                   setHeader((current) => ({ ...current, batchNumber: event.target.value }))
                 }
@@ -1076,7 +1112,7 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
               <input
                 className="in"
                 value={header.serialNumber}
-                readOnly={!isCreateMode}
+                readOnly={!isCreateMode && !measurementsEditable}
                 onChange={(event) =>
                   setHeader((current) => ({ ...current, serialNumber: event.target.value }))
                 }
@@ -1088,7 +1124,7 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
               <input
                 className="in"
                 value={header.heatNumber}
-                readOnly={!isCreateMode}
+                readOnly={!isCreateMode && !measurementsEditable}
                 onChange={(event) =>
                   setHeader((current) => ({ ...current, heatNumber: event.target.value }))
                 }
@@ -1101,7 +1137,7 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
                 className="in"
                 placeholder="e.g. VMC-01, CNC-LATHE-02"
                 value={header.machine}
-                readOnly={!isCreateMode}
+                readOnly={!isCreateMode && !measurementsEditable}
                 onChange={(event) =>
                   setHeader((current) => ({ ...current, machine: event.target.value }))
                 }
@@ -1114,7 +1150,7 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
                 className="in"
                 placeholder="e.g. Op 10 Turning"
                 value={header.operation}
-                readOnly={!isCreateMode}
+                readOnly={!isCreateMode && !measurementsEditable}
                 onChange={(event) =>
                   setHeader((current) => ({ ...current, operation: event.target.value }))
                 }
@@ -1127,7 +1163,7 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
                 className="in"
                 placeholder="e.g. O1002"
                 value={header.programNumber}
-                readOnly={!isCreateMode}
+                readOnly={!isCreateMode && !measurementsEditable}
                 onChange={(event) =>
                   setHeader((current) => ({ ...current, programNumber: event.target.value }))
                 }
@@ -1140,7 +1176,7 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
                 className="in"
                 placeholder="e.g. Setup 1"
                 value={header.setupNumber}
-                readOnly={!isCreateMode}
+                readOnly={!isCreateMode && !measurementsEditable}
                 onChange={(event) =>
                   setHeader((current) => ({ ...current, setupNumber: event.target.value }))
                 }
@@ -1152,7 +1188,7 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
               <input
                 className="in"
                 value={header.drawingNumber}
-                readOnly={!isCreateMode}
+                readOnly={!isCreateMode && !measurementsEditable}
                 onChange={(event) =>
                   setHeader((current) => ({ ...current, drawingNumber: event.target.value }))
                 }
@@ -1164,7 +1200,7 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
               <input
                 className="in"
                 value={header.drawingRevision}
-                readOnly={!isCreateMode}
+                readOnly={!isCreateMode && !measurementsEditable}
                 onChange={(event) =>
                   setHeader((current) => ({ ...current, drawingRevision: event.target.value }))
                 }
@@ -1176,7 +1212,7 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
               <input
                 className="in"
                 value={header.inspector}
-                readOnly={!isCreateMode}
+                readOnly={!isCreateMode && !measurementsEditable}
                 onChange={(event) =>
                   setHeader((current) => ({ ...current, inspector: event.target.value }))
                 }
@@ -1189,7 +1225,7 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
                 type="number"
                 className="in"
                 value={header.acceptedQuantity}
-                readOnly={!isCreateMode}
+                readOnly={!isCreateMode && !measurementsEditable}
                 onChange={(event) => {
                   const val = event.target.value;
                   const accepted = Number(val);
@@ -1214,7 +1250,7 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
                 type="number"
                 className="in"
                 value={header.rejectedQuantity}
-                readOnly={!isCreateMode}
+                readOnly={!isCreateMode && !measurementsEditable}
                 onChange={(event) =>
                   setHeader((current) => ({ ...current, rejectedQuantity: event.target.value }))
                 }
@@ -1227,7 +1263,7 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
                 type="number"
                 className="in"
                 value={header.reworkQuantity}
-                readOnly={!isCreateMode}
+                readOnly={!isCreateMode && !measurementsEditable}
                 onChange={(event) =>
                   setHeader((current) => ({ ...current, reworkQuantity: event.target.value }))
                 }
@@ -1240,7 +1276,7 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
                 type="number"
                 className="in"
                 value={header.holdQuantity}
-                readOnly={!isCreateMode}
+                readOnly={!isCreateMode && !measurementsEditable}
                 onChange={(event) =>
                   setHeader((current) => ({ ...current, holdQuantity: event.target.value }))
                 }
@@ -1252,7 +1288,7 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
               <input
                 className="in"
                 value={header.remarks}
-                readOnly={!isCreateMode}
+                readOnly={!isCreateMode && !measurementsEditable}
                 onChange={(event) =>
                   setHeader((current) => ({ ...current, remarks: event.target.value }))
                 }
@@ -1550,188 +1586,52 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
 
             {!isCreateMode && !viewOnly && (
               <>
-                {status === 'DRAFT' && (
-                  <button
-                    type="button"
-                    className="btn"
-                    onClick={() => runWorkflow('start')}
-                    disabled={isBusy}
-                  >
-                    <span className="material-symbols-rounded">play_arrow</span>
-                    Start Inspection
-                  </button>
-                )}
-
-                {measurementsEditable && (
+                {['DRAFT', 'IN_PROGRESS', 'SUBMITTED', 'PASS', 'HOLD'].includes(status) && (
                   <>
-                    <button
-                      type="button"
-                      className="btn"
-                      onClick={handleSaveMeasurements}
-                      disabled={isBusy}
-                    >
-                      <span className="material-symbols-rounded">save</span>
-                      Save Measurements
-                    </button>
-                    <label className="btn" style={{ cursor: 'pointer' }}>
-                      <span className="material-symbols-rounded">upload_file</span>
-                      CSV Import
-                      <input
-                        type="file"
-                        accept=".csv,.txt"
-                        style={{ display: 'none' }}
-                        onChange={async (e) => {
-                          const file = e.target.files?.[0];
-                          if (!file || !documentId) return;
-                          try {
-                            const text = await file.text();
-                            const result = await qualityApi.bulkImportMeasurements(documentId, text);
-                            toast(`Imported: ${result.matched} matched, ${result.unmatched} unmatched of ${result.totalRows} rows`);
-                            documentQuery.refetch();
-                          } catch (err) {
-                            toast(getApiErrorMessage(err, 'CSV import failed.'), 'error');
-                          }
-                          e.target.value = '';
-                        }}
-                      />
-                    </label>
+                    {status === 'HOLD' ? (
+                      <button
+                        type="button"
+                        className="btn"
+                        onClick={() => runWorkflow('release-hold')}
+                        disabled={isBusy}
+                      >
+                        <span className="material-symbols-rounded">play_circle</span>
+                        Release Hold
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn"
+                        onClick={() => setDecisionModal({ kind: 'hold' })}
+                        disabled={isBusy}
+                      >
+                        <span className="material-symbols-rounded">back_hand</span>
+                        Hold
+                      </button>
+                    )}
+
+                    {can('quality', 'Approve') ? (
+                      <button
+                        type="button"
+                        className="btn btn-p"
+                        onClick={runUpdateInventory}
+                        disabled={isBusy}
+                      >
+                        <span className="material-symbols-rounded">inventory</span>
+                        Update Inventory
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn btn-p"
+                        disabled
+                        title="Requires Quality Approve permission"
+                      >
+                        <span className="material-symbols-rounded">inventory</span>
+                        Update Inventory
+                      </button>
+                    )}
                   </>
-                )}
-
-                {['DRAFT', 'IN_PROGRESS'].includes(status) && (
-                  <button
-                    type="button"
-                    className="btn btn-p"
-                    onClick={() => runWorkflow('submit')}
-                    disabled={isBusy}
-                  >
-                    <span className="material-symbols-rounded">send</span>
-                    Submit for Decision
-                  </button>
-                )}
-
-                {status === 'SUBMITTED' && can('quality', 'Approve') && (
-                  <>
-                    <button
-                      type="button"
-                      className="btn btn-g"
-                      onClick={() => setDecisionModal({ kind: 'decide', decision: 'PASS' })}
-                      disabled={isBusy}
-                    >
-                      <span className="material-symbols-rounded">check_circle</span>
-                      Decide PASS
-                    </button>
-
-                    <button
-                      type="button"
-                      className="btn"
-                      onClick={() => setDecisionModal({ kind: 'decide', decision: 'HOLD' })}
-                      disabled={isBusy}
-                    >
-                      <span className="material-symbols-rounded">pause_circle</span>
-                      Decide HOLD
-                    </button>
-
-                    <button
-                      type="button"
-                      className="btn btn-d"
-                      onClick={() => setDecisionModal({ kind: 'decide', decision: 'REJECT' })}
-                      disabled={isBusy}
-                    >
-                      <span className="material-symbols-rounded">cancel</span>
-                      Decide REJECT
-                    </button>
-
-                    <button
-                      type="button"
-                      className="btn btn-g"
-                      onClick={() => runWorkflow('approve')}
-                      disabled={isBusy}
-                    >
-                      <span className="material-symbols-rounded">thumb_up</span>
-                      Approve
-                    </button>
-                  </>
-                )}
-
-                {['SUBMITTED', 'IN_PROGRESS'].includes(status) && (
-                  <button
-                    type="button"
-                    className="btn"
-                    onClick={() => setDecisionModal({ kind: 'hold' })}
-                    disabled={isBusy}
-                  >
-                    <span className="material-symbols-rounded">back_hand</span>
-                    Hold
-                  </button>
-                )}
-
-                {status === 'HOLD' && (
-                  <button
-                    type="button"
-                    className="btn"
-                    onClick={() => runWorkflow('release-hold')}
-                    disabled={isBusy}
-                  >
-                    <span className="material-symbols-rounded">play_circle</span>
-                    Release Hold
-                  </button>
-                )}
-
-                {['PASS', 'HOLD', 'APPROVED', 'FAIL', 'SUBMITTED'].includes(status) && (
-                  <button
-                    type="button"
-                    className="btn"
-                    onClick={() => setDecisionModal({ kind: 'close' })}
-                    disabled={isBusy}
-                  >
-                    <span className="material-symbols-rounded">task_alt</span>
-                    Close
-                  </button>
-                )}
-
-                {['DRAFT', 'SUBMITTED'].includes(status) && (
-                  <button
-                    type="button"
-                    className="btn btn-d"
-                    onClick={() => setDecisionModal({ kind: 'cancel' })}
-                    disabled={isBusy}
-                  >
-                    <span className="material-symbols-rounded">block</span>
-                    Cancel
-                  </button>
-                )}
-
-                {['CLOSED', 'CANCELLED'].includes(status) && (
-                  <button
-                    type="button"
-                    className="btn"
-                    onClick={() => setDecisionModal({ kind: 'reopen' })}
-                    disabled={isBusy}
-                  >
-                    <span className="material-symbols-rounded">restart_alt</span>
-                    Reopen
-                  </button>
-                )}
-
-                {['CLOSED', 'REJECTED'].includes(status) && documentId && (
-                  <button
-                    type="button"
-                    className="btn"
-                    onClick={async () => {
-                      if (!confirm('Create a re-inspection linked to this inspection?')) return;
-                      try {
-                        const { data } = await apiClient.post(`/v1/quality/inspections/${documentId}/re-inspection`, {
-                          priority: 'High',
-                        });
-                        toast('Re-inspection created: ' + (data.inspectionNumber ?? data.id));
-                      } catch (e) { toast(getApiErrorMessage(e, 'Re-inspection failed.'), 'error'); }
-                    }}
-                    disabled={isBusy}
-                  >
-                    <span className="material-symbols-rounded">replay</span>
-                    Re-Inspect
-                  </button>
                 )}
               </>
             )}

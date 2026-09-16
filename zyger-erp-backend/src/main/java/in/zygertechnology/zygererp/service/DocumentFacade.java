@@ -598,6 +598,38 @@ public class DocumentFacade {
         }
     }
 
+    /**
+     * FRS requirement: only the Accepted Qty of an Inward line ever reaches stock — the
+     * Received Qty is just what physically arrived. Accepted Qty is mandatory (no default,
+     * the receiving clerk must state it explicitly) and can't exceed what was received;
+     * whatever isn't accepted is recorded on the line's own Rejected Qty/Reason but never
+     * posted to the ledger at all. See collectLines(), which reads acceptedQty instead of
+     * the received/produced qty for these doc types when building the stock-in movement.
+     */
+    private void validateInwardAcceptedQty(String key, DocEntity e) {
+        if (!DIRECT_POST_INWARD_KEYS.contains(key)) return;
+        List<?> lines = e.getLines();
+        if (lines == null) return;
+        for (Object line : lines) {
+            if (!(line instanceof LineEntity le)) continue;
+            BigDecimal received = le.getQty();
+            BigDecimal accepted = le.getAcceptedQty();
+            if (accepted == null) {
+                throw new IllegalArgumentException(
+                        "Accepted Qty is mandatory for item " + le.getItemCode() + " on an Inward Entry line");
+            }
+            if (accepted.signum() < 0) {
+                throw new IllegalArgumentException(
+                        "Accepted Qty cannot be negative for item " + le.getItemCode());
+            }
+            if (received != null && accepted.compareTo(received) > 0) {
+                throw new IllegalArgumentException(
+                        "Accepted Qty (" + accepted + ") cannot exceed Received Qty (" + received
+                                + ") for item " + le.getItemCode());
+            }
+        }
+    }
+
     private BigDecimal lineQty(LineEntity l, String qtyField) {
         try {
             java.lang.reflect.Method m = l.getClass().getMethod("get" + Character.toUpperCase(qtyField.charAt(0)) + qtyField.substring(1));
@@ -665,6 +697,7 @@ public class DocumentFacade {
         attach(e);
 
         validateLineQtyAndPresence(key, e, body);
+        validateInwardAcceptedQty(key, e);
         validateDcStockAvailability(key, e);
         validateGeneralDcGstin(key, e);
         validateReturnEligibility(key, e);
@@ -687,7 +720,6 @@ public class DocumentFacade {
         e.setDocNo(docNo);
         em.persist(e);
         em.flush();
-        createQualityInspectionIfRequired(e, body, user);
         recordDocLinks(key, e, user);
         return e;
     }
@@ -714,105 +746,197 @@ public class DocumentFacade {
         }
     }
 
-    private void createQualityInspectionIfRequired(DocEntity e, Map<String, Object> body, String user) {
-        String key = findKeyForEntity(e);
-        if (!Set.of("po-inward", "lo-inward", "jo-inward", "general-inward", "grn").contains(key)) {
-            return;
+    private static final Set<String> QC_INWARD_KEYS = Set.of(
+            "po-inward", "lo-inward", "jo-inward", "general-inward", "grn");
+
+    /**
+     * Inward → QC deferral: inspections are no longer auto-created when the inward is
+     * saved. A QC-required receipt just holds stock in QC_HOLD at post time; the Quality
+     * Inspection (with its IQC/LO/JOMIN number) is created on demand when an operator
+     * clicks Process in the Inspection Pending queue. See {@link #createInspectionsFromInward}.
+     */
+    private boolean qcRequired(DocEntity e) {
+        try {
+            Field f = e.getClass().getDeclaredField("qcRequired");
+            f.setAccessible(true);
+            Object v = f.get(e);
+            return v != null && (
+                "Yes".equalsIgnoreCase(String.valueOf(v)) ||
+                "true".equalsIgnoreCase(String.valueOf(v)) ||
+                "1".equals(String.valueOf(v)));
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> awaitingQcDocRows(String key) {
+        List<Map<String, Object>> rows = new ArrayList<>();
+        if (!QC_INWARD_KEYS.contains(key)) return rows;
+        for (DocEntity d : findAll(key)) {
+            if (d.getId() == null
+                    || !qcRequired(d)
+                    || !"POSTED".equals(d.getStatus())) {
+                continue;
+            }
+            Long cnt = em.createQuery(
+                    "SELECT count(q) FROM QualityInspection q WHERE q.sourceType = :st AND q.sourceId = :sid", Long.class)
+                    .setParameter("st", key)
+                    .setParameter("sid", d.getId().toString())
+                    .getSingleResult();
+            if (cnt > 0) continue;
+
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("id", null);
+            row.put("inspectionId", null);
+            row.put("inspectionNumber", d.getDocNo());
+            row.put("docNo", d.getDocNo());
+            row.put("inspectionType", resolveInspectionType(key).name());
+            row.put("pendingFromInward", true);
+            row.put("sourceDocKey", key);
+            row.put("sourceDocId", d.getId());
+            row.put("sourceType", key);
+            row.put("sourceNumber", d.getDocNo());
+            row.put("itemDescription", "");
+            row.put("receivedQuantity", 0);
+            List<? extends LineEntity> lines = d.getLines();
+            if (lines != null && !lines.isEmpty()) {
+                LineEntity l0 = lines.get(0);
+                row.put("itemCode", l0.getItemCode());
+                if (l0.getItemDesc() != null && !l0.getItemDesc().isBlank()) {
+                    row.put("itemDescription", l0.getItemDesc());
+                }
+                row.put("receivedQuantity", inwardAcceptedQtySum(lines, key));
+            }
+            row.put("inspectionStatus", "AWAITING_QC");
+            row.put("decisionStatus", "PENDING");
+            row.put("priority", "Normal");
+            row.put("isLocked", false);
+            row.put("createdAt", d.getCreatedAt() != null ? d.getCreatedAt().toString() : null);
+            rows.add(row);
+        }
+        return rows;
+    }
+
+    private BigDecimal inwardAcceptedQtySum(List<? extends LineEntity> lines, String key) {
+        BigDecimal sum = BigDecimal.ZERO;
+        for (LineEntity line : lines) {
+            BigDecimal qty = DIRECT_POST_INWARD_KEYS.contains(key) && line.getAcceptedQty() != null
+                    ? line.getAcceptedQty()
+                    : (line.getQty() != null ? line.getQty() : BigDecimal.ONE);
+            sum = sum.add(qty);
+        }
+        return sum;
+    }
+
+    /**
+     * Creates the Quality Inspection(s) for a QC-required inward document on demand —
+     * called by the Inspection Pending queue's Process action. One inspection per line
+     * (item/batch/heat/qty), each with its number allocated here (e.g. IQC-2026-00XX).
+     * Idempotent: if inspections already exist for the source document it returns those
+     * instead of creating duplicates.
+     */
+    @Transactional
+    public List<Long> createInspectionsFromInward(String key, Long id, String user) {
+        if (!QC_INWARD_KEYS.contains(key)) {
+            throw new IllegalArgumentException("Not an inward source: " + key);
+        }
+        DocEntity e = get(key, id);
+        if (!qcRequired(e)) {
+            throw new IllegalStateException("Document " + e.getDocNo() + " does not require Quality Inspection");
         }
 
-        Object qcReq = body.get("qcRequired");
-        if (qcReq == null && e != null) {
-            try {
-                Field f = e.getClass().getDeclaredField("qcRequired");
-                f.setAccessible(true);
-                qcReq = f.get(e);
-            } catch (Exception ignored) {}
-        }
-
-        boolean isQcRequired = qcReq != null && (
-            "Yes".equalsIgnoreCase(String.valueOf(qcReq)) ||
-            "true".equalsIgnoreCase(String.valueOf(qcReq)) ||
-            "1".equals(String.valueOf(qcReq))
-        );
-
-        if (!isQcRequired) {
-            return;
-        }
+        List<Long> existing = em.createQuery(
+                "SELECT q.id FROM QualityInspection q WHERE q.sourceType = :st AND q.sourceId = :sid ORDER BY q.id", Long.class)
+                .setParameter("st", key)
+                .setParameter("sid", id.toString())
+                .getResultList();
+        if (!existing.isEmpty()) return existing;
 
         List<? extends LineEntity> lines = e.getLines();
         if (lines == null || lines.isEmpty()) {
-            return;
+            throw new IllegalStateException("Inward document " + e.getDocNo() + " has no lines");
         }
 
+        List<Long> created = new ArrayList<>();
         for (LineEntity line : lines) {
-            QualityInspection qi = new QualityInspection();
-            QualityInspectionType inspectionType = resolveInspectionType(key);
-            String prefix = QualityInspectionService.prefixForType(inspectionType);
-            qi.setDocNo(numbers.next(QualityInspectionService.KEY, prefix));
-            qi.setInspectionType(inspectionType);
-            // Inward Entry FRD v2.0 §3.2/§6.3 (G1): sourceType must be the specific inward doc
-            // key, not a generic "INWARD" — releaseHeldStockToStore()/applyDispositionStock() on
-            // accept/reject key their QC_HOLD lookup on this inspection's own item/batch/heat, and
-            // several other lookups (resolveSupplier, close-cascade) switch on sourceType by key.
-            qi.setSourceType(key);
-            if (e.getId() != null) qi.setSourceId(e.getId().toString());
-            qi.setSourceNumber(e.getDocNo());
-            qi.setBatchNumber(line.getBatchNo());
-            qi.setHeatNumber(line.getHeatNo());
-            qi.setDocDate(e.getDocDate() != null ? e.getDocDate() : LocalDate.now());
-            qi.setInspectionDate(e.getDocDate() != null ? e.getDocDate() : LocalDate.now());
-            qi.setInspectionStatus("DRAFT");
-            qi.setDecisionStatus("PENDING");
-            qi.setCreatedBy(user);
-            qi.setCreatedAt(Instant.now());
-            qi.setUpdatedAt(Instant.now());
-
-            // getItemCode()/getItemDesc()/getQty() are LineEntity interface methods, present on
-            // every line type (PoInwardLine.getQty() aliases its own receivedQty column) — calling
-            // them directly avoids the reflective "qty"/"itemCode" field lookups that silently
-            // failed for line classes without a literal field of that exact name (e.g. PoInwardLine
-            // has no `qty` field, only `receivedQty`), which previously left every auto-created
-            // inspection's quantity hardcoded at the BigDecimal.ONE fallback.
-            String itemCode = line.getItemCode();
-            String itemDesc = line.getItemDesc();
-            if (itemDesc == null || itemDesc.isBlank()) {
-                try {
-                    Field fName = line.getClass().getDeclaredField("itemName");
-                    fName.setAccessible(true);
-                    itemDesc = (String) fName.get(line);
-                } catch (Exception ignored) {}
-            }
-            BigDecimal qty = line.getQty() != null ? line.getQty() : BigDecimal.ONE;
-
-            try {
-                Field fPoNo = e.getClass().getDeclaredField("purchaseOrderNo");
-                fPoNo.setAccessible(true);
-                qi.setPurchaseOrderNumber((String) fPoNo.get(e));
-            } catch (Exception ignored) {}
-
-            String lineLoc = line.getLocation();
-            if (lineLoc == null || lineLoc.isBlank()) {
-                lineLoc = firstNonEmpty(headerStr(e, "sourceLocation"), headerStr(e, "storeLocation"));
-            }
-            if (lineLoc != null && !lineLoc.isBlank()) {
-                qi.setLocation(lineLoc);
-            }
-
-            qi.setItemCode(itemCode != null && !itemCode.isBlank() ? itemCode : "ITEM-001");
-            qi.setItemDescription(itemDesc != null ? itemDesc : "");
-            qi.setReceivedQuantity(qty);
-            qi.setInspectionQuantity(qty);
-
+            QualityInspection qi = buildInspectionForLine(e, key, line, user);
             em.persist(qi);
+            em.flush();
+            created.add(qi.getId());
         }
+        return created;
+    }
+
+    private QualityInspection buildInspectionForLine(DocEntity e, String key, LineEntity line, String user) {
+        QualityInspection qi = new QualityInspection();
+        QualityInspectionType inspectionType = resolveInspectionType(key);
+        String prefix = QualityInspectionService.prefixForType(inspectionType);
+        String qiDocNo = numbers.next(QualityInspectionService.KEY, prefix);
+        qi.setDocNo(qiDocNo);
+        qi.setInspectionNumber(qiDocNo);
+        qi.setInspectionType(inspectionType);
+        // Inward Entry FRD v2.0 §3.2/§6.3 (G1): sourceType must be the specific inward doc
+        // key, not a generic "INWARD" — releaseHeldStockToStore()/applyDispositionStock() on
+        // accept/reject key their QC_HOLD lookup on this inspection's own item/batch/heat, and
+        // several other lookups (resolveSupplier, close-cascade) switch on sourceType by key.
+        qi.setSourceType(key);
+        if (e.getId() != null) qi.setSourceId(e.getId().toString());
+        qi.setSourceNumber(e.getDocNo());
+        qi.setBatchNumber(line.getBatchNo());
+        qi.setHeatNumber(line.getHeatNo());
+        qi.setDocDate(e.getDocDate() != null ? e.getDocDate() : LocalDate.now());
+        qi.setInspectionDate(e.getDocDate() != null ? e.getDocDate() : LocalDate.now());
+        qi.setInspectionStatus("DRAFT");
+        qi.setDecisionStatus("PENDING");
+        qi.setCreatedBy(user);
+        qi.setCreatedAt(Instant.now());
+        qi.setUpdatedAt(Instant.now());
+
+        // getItemCode()/getItemDesc()/getQty() are LineEntity interface methods, present on
+        // every line type (PoInwardLine.getQty() aliases its own receivedQty column).
+        String itemCode = line.getItemCode();
+        String itemDesc = line.getItemDesc();
+        if (itemDesc == null || itemDesc.isBlank()) {
+            try {
+                Field fName = line.getClass().getDeclaredField("itemName");
+                fName.setAccessible(true);
+                itemDesc = (String) fName.get(line);
+            } catch (Exception ignored) {}
+        }
+        // Only the Accepted Qty ever lands in QC_HOLD (see collectLines()), so the
+        // inspection's Received/Inspection Qty must match that, not the raw Received Qty.
+        BigDecimal qty = DIRECT_POST_INWARD_KEYS.contains(key) && line.getAcceptedQty() != null
+                ? line.getAcceptedQty()
+                : (line.getQty() != null ? line.getQty() : BigDecimal.ONE);
+
+        try {
+            Field fPoNo = e.getClass().getDeclaredField("purchaseOrderNo");
+            fPoNo.setAccessible(true);
+            qi.setPurchaseOrderNumber((String) fPoNo.get(e));
+        } catch (Exception ignored) {}
+
+        String lineLoc = line.getLocation();
+        if (lineLoc == null || lineLoc.isBlank()) {
+            lineLoc = firstNonEmpty(headerStr(e, "sourceLocation"), headerStr(e, "storeLocation"));
+        }
+        if (lineLoc != null && !lineLoc.isBlank()) {
+            qi.setLocation(lineLoc);
+        }
+
+        qi.setItemCode(itemCode != null && !itemCode.isBlank() ? itemCode : "ITEM-001");
+        qi.setItemDescription(itemDesc != null ? itemDesc : "");
+        qi.setReceivedQuantity(qty);
+        qi.setInspectionQuantity(qty);
+        return qi;
     }
 
     private QualityInspectionType resolveInspectionType(String sourceKey) {
         return switch (sourceKey) {
             case "po-inward", "grn" -> QualityInspectionType.IQC;
             case "lo-inward" -> QualityInspectionType.LO;
-            case "jo-inward" -> QualityInspectionType.FAI;
-            case "general-inward" -> QualityInspectionType.LINE;
+            case "jo-inward" -> QualityInspectionType.JOMIN;
+            case "general-inward" -> QualityInspectionType.IQC;
             default -> QualityInspectionType.IQC;
         };
     }
@@ -847,8 +971,12 @@ public class DocumentFacade {
     @Transactional
     public DocEntity update(String key, Long id, Map<String, Object> body, String user) {
         DocEntity old = get(key, id);
+        // Some doc types (e.g. quality-inspection) track their workflow via their own status
+        // field (inspectionStatus) and never populate this generic one, leaving it permanently
+        // null — List.of(...).contains(null) would NPE, so a null status is treated as editable
+        // rather than blocked, since the generic engine never marked it as an immutable state.
         if (!Set.of("purchase-request", "supplier-enquiry", "supplier-quotation", "purchase-order").contains(key)
-                && !List.of("DRAFT", "REJECTED").contains(old.getStatus()))
+                && old.getStatus() != null && !List.of("DRAFT", "REJECTED").contains(old.getStatus()))
             throw new IllegalStateException("Only DRAFT/REJECTED documents can be edited");
 
         if (body.containsKey("version") && body.get("version") != null) {
@@ -930,6 +1058,7 @@ public class DocumentFacade {
         // rejected qty past what was actually inspected and it would go straight through
         // to post() unvalidated.
         validateGrn(key, old);
+        validateInwardAcceptedQty(key, old);
         attach(old);
         return old;
     }
@@ -1735,7 +1864,17 @@ public class DocumentFacade {
                 if (l instanceof BaseLine bl && (bl.getLocation() == null || bl.getLocation().isBlank())) {
                     bl.setLocation(loc);
                 }
-                out.add(new LedgerLine(l.getItemCode(), loc, l.getBatchNo(), l.getHeatNo(), l.getQty().doubleValue()));
+                if (DIRECT_POST_INWARD_KEYS.contains(def.key())) {
+                    // Only the Accepted Qty ever reaches stock for an Inward line — the
+                    // Received Qty is just what physically arrived. validateInwardAcceptedQty()
+                    // already guarantees acceptedQty is present by the time post() runs; a line
+                    // fully rejected at receipt (acceptedQty 0) posts no stock movement at all.
+                    BigDecimal accepted = l.getAcceptedQty();
+                    if (accepted == null || accepted.signum() <= 0) continue;
+                    out.add(new LedgerLine(l.getItemCode(), loc, l.getBatchNo(), l.getHeatNo(), accepted.doubleValue()));
+                } else {
+                    out.add(new LedgerLine(l.getItemCode(), loc, l.getBatchNo(), l.getHeatNo(), l.getQty().doubleValue()));
+                }
             }
             return out;
         }
@@ -2011,6 +2150,8 @@ public class DocumentFacade {
      * DocumentFacadeTest.ValidateBatchHeat.purchaseRequestExemptFromBatchCheck expectation). */
     private void validateBatchHeat(String key, DocEntity e) {
         if (e.getLines() == null) return;
+        // PO Inward has no Batch/Heat/Lot fields on its line items — nothing to require here.
+        if ("po-inward".equals(key)) return;
         DocTypes.Effect effect;
         try { effect = DocTypes.get(key).effect(); } catch (Exception ex) { return; }
         if (effect != DocTypes.Effect.IN && effect != DocTypes.Effect.OUT) return;
@@ -2574,14 +2715,16 @@ public class DocumentFacade {
         LocalDate now = LocalDate.now();
         String txType = key.toUpperCase().replace("-", "_") + "_CANCEL";
         for (LineEntity line : e.getLines()) {
-            BigDecimal qty = line.getQty();
+            // Only the Accepted Qty was ever posted (see collectLines()) — reversing the raw
+            // Received Qty here would overshoot whatever's actually in stock for this line.
+            BigDecimal qty = DIRECT_POST_INWARD_KEYS.contains(key) ? line.getAcceptedQty() : line.getQty();
             if (qty == null || qty.compareTo(BigDecimal.ZERO) <= 0) continue;
             String loc = line.getLocation() != null && !line.getLocation().isBlank()
                     ? line.getLocation() : "MAIN";
             try {
-                stockService.recordStockOut(e.getDocNo(), key, txType,
+                stockService.reverseInwardStock(e.getDocNo(), key, txType,
                         line.getItemCode(), loc, line.getBatchNo(), line.getHeatNo(),
-                        qty, now, user, false);
+                        qty, now, user);
             } catch (IllegalArgumentException ex) {
                 throw new IllegalStateException("Cannot cancel " + e.getDocNo() + ": item " + line.getItemCode()
                         + " at " + loc + " has already been partly or fully consumed downstream. "

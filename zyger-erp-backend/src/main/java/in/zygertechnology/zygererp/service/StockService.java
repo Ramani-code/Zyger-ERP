@@ -230,6 +230,66 @@ public class StockService {
         updateBalance(itemCode, loc, batch, heat, "FREE", BigDecimal.ZERO, qty);
     }
 
+    private static final List<String> REVERSAL_STATUS_PRIORITY =
+            List.of("FREE", "QC_HOLD", "BLOCKED", "QUARANTINE", "REJECTED", "SCRAP");
+
+    /**
+     * Reverses a posted inward's stock regardless of which status bucket(s) it currently sits
+     * in — unlike {@link #recordStockOut}, which always targets FREE. A direct-post inward with
+     * QC required lands in QC_HOLD, and QC may have since split it across FREE/REJECTED/etc., so
+     * cancelling it must claw back from wherever it actually is, not assume it's still FREE
+     * (that silently left QC_HOLD stock stranded and could delete an unrelated FREE balance).
+     * Reverses FREE first, then QC_HOLD, then any other status bucket, until qty is accounted
+     * for; throws if the total across every bucket is less than requested (already consumed
+     * downstream, e.g. issued out).
+     */
+    @Transactional
+    public void reverseInwardStock(String docNo, String docType, String txType, String itemCode,
+                                   String location, String batchNo, String heatNo,
+                                   BigDecimal qty, LocalDate txDate, String user) {
+        String loc = (location != null && !location.isBlank()) ? location : "MAIN";
+        String batch = batchNo != null ? batchNo : "";
+        String heat = heatNo != null ? heatNo : "";
+        BigDecimal remaining = qty != null ? qty : BigDecimal.ZERO;
+        if (remaining.compareTo(BigDecimal.ZERO) <= 0) return;
+
+        if (ledger.existsByDocNoAndDocTypeAndTxType(docNo, docType, txType)) {
+            log.warn("Duplicate inward reversal blocked: docNo={}, docType={}, txType={}", docNo, docType, txType);
+            return;
+        }
+
+        Map<String, StockBalance> byStatus = new LinkedHashMap<>();
+        for (StockBalance sb : balances.findByItemCodeAndLocation(itemCode, loc)) {
+            if (!batch.equals(str(sb.getBatchNo())) || !heat.equals(str(sb.getHeatNo()))) continue;
+            byStatus.put(sb.getStockStatus(), sb);
+        }
+
+        BigDecimal totalAvailable = byStatus.values().stream()
+                .map(StockBalance::getQty).filter(Objects::nonNull)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        if (totalAvailable.compareTo(remaining) < 0) {
+            throw new IllegalArgumentException("Insufficient stock to reverse: requested " + remaining
+                    + " but only " + totalAvailable + " of item " + itemCode + " remains at " + loc);
+        }
+
+        for (String status : REVERSAL_STATUS_PRIORITY) {
+            if (remaining.compareTo(BigDecimal.ZERO) <= 0) break;
+            StockBalance sb = byStatus.get(status);
+            if (sb == null || sb.getQty() == null || sb.getQty().compareTo(BigDecimal.ZERO) <= 0) continue;
+            BigDecimal take = sb.getQty().compareTo(remaining) < 0 ? sb.getQty() : remaining;
+            updateBalance(itemCode, loc, batch, heat, status, BigDecimal.ZERO, take);
+            ledger.save(StockLedger.builder()
+                    .docNo(docNo).docType(docType).txType(txType)
+                    .itemCode(itemCode).location(loc).batchNo(batch).heatNo(heat)
+                    .stockStatus(status)
+                    .inQty(BigDecimal.ZERO).outQty(take)
+                    .txDate(txDate != null ? txDate : LocalDate.now())
+                    .createdBy(user).createdAt(Instant.now())
+                    .build());
+            remaining = remaining.subtract(take);
+        }
+    }
+
     public void recordStockAdjustment(String docNo, String docType, String txType, String itemCode,
                                       String location, String batchNo, String heatNo,
                                       BigDecimal deltaQty, LocalDate txDate, String user) {

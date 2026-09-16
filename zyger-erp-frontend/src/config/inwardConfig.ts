@@ -156,7 +156,7 @@ export const INWARD_TYPE_LIST: InwardTypeConfig[] = [
   INWARD_TYPES.GENERAL_INWARD,
 ];
 
-export function buildLineFields(qtyField: string, _inwardType?: InwardType): InwardFieldConfig[] {
+export function buildLineFields(qtyField: string, inwardType?: InwardType): InwardFieldConfig[] {
   const fields: InwardFieldConfig[] = [
     { key: 'itemCode', label: 'Item Code', type: 'item', required: true },
     { key: 'itemDesc', label: 'Item Name', type: 'auto' },
@@ -168,21 +168,22 @@ export function buildLineFields(qtyField: string, _inwardType?: InwardType): Inw
     { key: 'tax', label: 'Tax (%)', type: 'number' },
     { key: 'taxAmount', label: 'Tax Amt', type: 'auto' },
     { key: 'netAmount', label: 'Net Amt', type: 'auto' },
-    { key: 'acceptedQty', label: 'Accepted', type: 'number' },
+    { key: 'acceptedQty', label: 'Accepted', type: 'number', required: true },
     { key: 'rejectedQty', label: 'Rejected', type: 'number' },
   ];
 
-  // Batch/Heat/Lot/Serial No render for every inward type, PO_INWARD included, so there's
-  // always a field to enter them when the received item needs traceability — batchNo/heatNo
-  // were already here; lotNo/serialNo exist on the line entity (BaseLine) but had no field on
-  // this screen at all until now (Inward Entry FRD v2.0 §6.2, closes as-is Open Question Q5).
-  // None of these four are currently enforced as mandatory server-side.
-  fields.push(
-    { key: 'batchNo', label: 'Batch No', type: 'text' },
-    { key: 'heatNo', label: 'Heat No', type: 'text' },
-    { key: 'lotNo', label: 'Lot No', type: 'text' },
-    { key: 'serialNo', label: 'Serial No', type: 'text' }
-  );
+  // Batch/Heat/Lot No render for every inward type except PO Inward, which doesn't need
+  // them. Serial No still renders everywhere (lotNo/serialNo exist on the line entity —
+  // BaseLine — from Inward Entry FRD v2.0 §6.2, closes as-is Open Question Q5). None of
+  // these are currently enforced as mandatory server-side.
+  if (inwardType !== 'PO_INWARD') {
+    fields.push(
+      { key: 'batchNo', label: 'Batch No', type: 'text' },
+      { key: 'heatNo', label: 'Heat No', type: 'text' },
+      { key: 'lotNo', label: 'Lot No', type: 'text' }
+    );
+  }
+  fields.push({ key: 'serialNo', label: 'Serial No', type: 'text' });
 
   fields.push(
     { key: 'location', label: 'Store Location', type: 'select', required: true, options: 'stores' },

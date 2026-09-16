@@ -5,6 +5,7 @@ import type {
   InspectionCreatePayload,
   InspectionListParams,
   DecisionInput,
+  DecisionQuantitiesPayload,
   InspectionDto,
 } from '../types/quality/quality.types';
 
@@ -44,6 +45,18 @@ export function useQualityInspectionUpdate() {
     mutationFn: ({ id, payload }: { id: number | string; payload: InspectionCreatePayload }) =>
       qualityApi.updateInspection(id, payload),
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['quality', 'inspections'] });
+    },
+  });
+}
+
+export function useQualityDecisionQuantitiesUpdate() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, payload }: { id: number | string; payload: DecisionQuantitiesPayload }) =>
+      qualityApi.updateDecisionQuantities(id, payload),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['quality', 'inspection'] });
       queryClient.invalidateQueries({ queryKey: ['quality', 'inspections'] });
     },
   });

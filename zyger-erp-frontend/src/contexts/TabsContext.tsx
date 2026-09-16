@@ -83,6 +83,19 @@ function saveState(tabIds: string[], activeTabId: string | null) {
   } catch { /* ignore */ }
 }
 
+/** A detail tab opened via openTab carries a suffixed id (e.g. `quality-inspection-29`
+ * from Inspection Pending, or `quality-inspection-edit-12`/`-view-12` from a reports
+ * drilldown). Those ids are never registered screenIds, so restoring them by
+ * getScreenComponent(id) alone landed on the ModulePlaceholder stub. Parse them back
+ * to the base screen + props so restored tabs render the real component again. */
+function parseDetailTabId(id: string): { base: string; docId: string; viewOnly: boolean } | null {
+  const editView = /^(.*)-(edit|view)-(\d+)$/.exec(id);
+  if (editView) return { base: editView[1], docId: editView[3], viewOnly: editView[2] === 'view' };
+  const numbered = /^(.*)-(\d+)$/.exec(id);
+  if (numbered) return { base: numbered[1], docId: numbered[2], viewOnly: false };
+  return null;
+}
+
 function buildTabsFromIds(ids: string[]): Tab[] {
   const tabs: Tab[] = [];
   for (const id of ids) {
@@ -92,14 +105,29 @@ function buildTabsFromIds(ids: string[]): Tab[] {
     }
     const component = getScreenComponent(id);
     const meta = findNavMeta(id);
+    const detail = detailTabFromId(id);
     tabs.push({
       id,
-      label: meta?.label ?? id,
-      icon: meta?.icon ?? 'article',
-      component,
+      label: detail ? detail.label : (meta?.label ?? id),
+      icon: detail?.icon ?? meta?.icon ?? 'article',
+      component: detail ? detail.component : component,
+      props: detail?.props,
     });
   }
   return tabs;
+}
+
+function detailTabFromId(id: string): Tab | null {
+  const parsed = parseDetailTabId(id);
+  if (!parsed) return null;
+  const meta = findNavMeta(parsed.base);
+  return {
+    id,
+    label: `${meta?.label ?? parsed.base.replace(/-/g, ' ')} #${parsed.docId}`,
+    icon: meta?.icon ?? 'article',
+    component: getScreenComponent(parsed.base),
+    props: { initialDocId: parsed.docId, viewOnly: parsed.viewOnly },
+  };
 }
 
 export function TabsProvider({ children }: { children: ReactNode }) {
@@ -133,7 +161,11 @@ export function TabsProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!screensLoaded) return;
     setTabs(prev => {
-      const next = prev.filter(t => t.id === 'dashboard' || canScreen(t.id, 'View'));
+      const next = prev.filter(t => {
+        if (t.id === 'dashboard') return true;
+        const baseId = parseDetailTabId(t.id)?.base ?? t.id;
+        return canScreen(baseId, 'View');
+      });
       setActiveTabId(active => (active === null || next.some(t => t.id === active) ? active : (next.length > 0 ? next[next.length - 1].id : null)));
       return next;
     });
@@ -160,13 +192,14 @@ export function TabsProvider({ children }: { children: ReactNode }) {
         if (exists) {
           setActiveTabId(hashScreen);
         } else {
-          const component = getScreenComponent(hashScreen);
           const meta = findNavMeta(hashScreen);
+          const detail = detailTabFromId(hashScreen);
           openTab({
             id: hashScreen,
-            label: meta?.label ?? hashScreen,
-            icon: meta?.icon ?? 'article',
-            component,
+            label: detail ? detail.label : (meta?.label ?? hashScreen),
+            icon: detail?.icon ?? meta?.icon ?? 'article',
+            component: detail ? detail.component : getScreenComponent(hashScreen),
+            props: detail?.props,
           });
         }
       }

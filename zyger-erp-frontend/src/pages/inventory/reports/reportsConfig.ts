@@ -118,7 +118,7 @@ export const DRILLDOWN_CONFIGS: Record<string, DrilldownConfig> = {
   'current-stock': {
     type: 'current-stock',
     title: 'Current Stock',
-    subtitle: 'On hand / reserved / available by item, summed across all stores',
+    subtitle: 'On hand / reserved / available by item, summed across all stores and batches — one row per item code',
     icon: 'inventory',
     columns: [
       { key: 'itemCode', label: 'Item' },
@@ -126,8 +126,8 @@ export const DRILLDOWN_CONFIGS: Record<string, DrilldownConfig> = {
       { key: 'category', label: 'Category' },
       { key: 'itemType', label: 'Type' },
       { key: 'itemGroup', label: 'Group' },
-      { key: 'batchNo', label: 'Batch' },
-      { key: 'heatNo', label: 'Heat' },
+      { key: 'batchNo', label: 'Batches' },
+      { key: 'heatNo', label: 'Heats' },
       { key: 'safetyStock', label: 'Safety', numeric: true },
       { key: 'onHand', label: 'On Hand', numeric: true },
       { key: 'reserved', label: 'Reserved', numeric: true },
@@ -135,6 +135,7 @@ export const DRILLDOWN_CONFIGS: Record<string, DrilldownConfig> = {
       { key: 'available', label: 'Available', numeric: true },
       { key: 'value', label: 'Value', money: true },
       { key: 'status', label: 'Status', badge: true },
+      { key: 'sourceTrace', label: 'Source Trace' },
     ],
     filters: ['search', 'item', 'location', 'category', 'lowStockOnly', 'includeZero'],
   },

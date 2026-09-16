@@ -91,7 +91,10 @@ public class QualityInspectionService {
     public QualityInspection create(Map<String, Object> body, String user) {
         QualityInspection e = mapper.convertValue(body, QualityInspection.class);
         if (e.getInspectionNumber() == null || e.getInspectionNumber().isBlank()) {
-            e.setInspectionNumber(numbers.nextFy(prefixFor(e)));
+            // Matches the PREFIX-YYYY-NNNN format used everywhere else in Quality/Inward
+            // (and by the auto-created inspections in DocumentFacade), instead of the
+            // fiscal-year PREFIX/FY/NNNNN format this used to produce on its own.
+            e.setInspectionNumber(numbers.next(KEY, prefixFor(e)));
         }
         e.setDocNo(e.getInspectionNumber());
         LocalDate d = parseDate(body.get("date"));
@@ -141,6 +144,8 @@ public class QualityInspectionService {
 
         // FRS §?: Apply AQL / ANSI Z1.4 sampling plan to derive sample size + acceptance criteria.
         applySamplingPlan(e);
+
+        validateQuantities(e);
 
         for (QualityInspectionLine l : e.getLines()) evaluate(l);
         em.persist(e);
@@ -206,6 +211,33 @@ public class QualityInspectionService {
 
     private String prefixFor(QualityInspection e) {
         return prefixForType(e.getInspectionType());
+    }
+
+    /**
+     * Updates only the decision quantities (Accepted/Rejected/Rework/Hold/Return/Concession)
+     * and Store Location — the fields a QC processor actually fills in on the Inspection
+     * Pending "Process" screen before deciding. Deliberately narrower than the generic
+     * document update(): that one replaces the whole characteristics/lines collection
+     * wholesale, which would silently reset every already-evaluated PASS/FAIL result back
+     * to PENDING (CharacteristicLinePayload carries no result field). Nothing here touches
+     * lines, so approve()/submit() see whatever was actually typed instead of falling back
+     * to the full inspected quantity because acceptedQuantity was never persisted.
+     */
+    @Transactional
+    public QualityInspection updateDecisionFields(Long inspectionId, Map<String, Object> body, String user) {
+        QualityInspection ins = get(inspectionId);
+        checkEditable(ins);
+        if (body.containsKey("acceptedQuantity")) ins.setAcceptedQuantity(bdVal(body.get("acceptedQuantity")));
+        if (body.containsKey("rejectedQuantity")) ins.setRejectedQuantity(bdVal(body.get("rejectedQuantity")));
+        if (body.containsKey("reworkQuantity")) ins.setReworkQuantity(bdVal(body.get("reworkQuantity")));
+        if (body.containsKey("holdQuantity")) ins.setHoldQuantity(bdVal(body.get("holdQuantity")));
+        if (body.containsKey("returnQuantity")) ins.setReturnQuantity(bdVal(body.get("returnQuantity")));
+        if (body.containsKey("concessionQuantity")) ins.setConcessionQuantity(bdVal(body.get("concessionQuantity")));
+        if (body.containsKey("location")) ins.setLocation(strVal(body.get("location")));
+        if (body.containsKey("remarks")) ins.setRemarks(strVal(body.get("remarks")));
+        ins.setUpdatedAt(Instant.now());
+        em.persist(ins);
+        return ins;
     }
 
     @Transactional
@@ -434,7 +466,9 @@ public class QualityInspectionService {
     public QualityInspection hold(Long id, String reason, String user) {
         QualityInspection ins = get(id);
         String from = ins.getInspectionStatus();
-        require(ins, INSPECT, "IN_PROGRESS");
+        // DRAFT allowed so the Open Inspection flow can Hold a freshly auto-created
+        // (inward-QC) inspection without first running Start → Submit.
+        require(ins, INSPECT, "IN_PROGRESS", "DRAFT");
         ins.setInspectionStatus("HOLD");
         ins.setDecisionRemarks(reason);
         ins.setUpdatedAt(Instant.now());
@@ -554,6 +588,53 @@ public class QualityInspectionService {
         ins.setUpdatedAt(Instant.now());
         recordStatusChange(ins, from, APPROVED, user, null);
         sendQualityNotification(ins, APPROVED, null);
+        autoCreateTestCertificate(ins, user);
+        publisher.publishEvent(new QualityInspectionApprovedEvent(
+                ins.getId(), "RELEASE", ins.getStockSyncKey(), user));
+        return ins;
+    }
+
+    /**
+     * One-click disposition for the Open Inspection / Inspection Pending flow: releases
+     * ONLY the Accepted Qty out of QC_HOLD to the store and marks the inspection APPROVED.
+     * The form already persisted Accepted/Rejected/Hold Qty + Store Location via
+     * decision-quantities, so the Operator never has to run Start → Submit → Decide →
+     * Approve — the whole chain collapses into this single action. Legal straight from
+     * DRAFT so a freshly Process-created inward inspection can be disposed immediately.
+     */
+    @Transactional
+    public QualityInspection updateInventory(Long id, String user) {
+        QualityInspection ins = get(id);
+        String from = ins.getInspectionStatus();
+        if (!List.of("DRAFT", "IN_PROGRESS", "SUBMITTED", "PASS", "HOLD").contains(from)) {
+            throw new IllegalStateException(
+                    "Update Inventory is only allowed from DRAFT/IN_PROGRESS/SUBMITTED/HOLD, not " + from);
+        }
+        if (ins.getLocation() == null || ins.getLocation().isBlank()) {
+            throw new IllegalArgumentException("Store Location is required before updating inventory.");
+        }
+        BigDecimal accepted = ins.getAcceptedQuantity();
+        if (accepted == null || accepted.compareTo(BigDecimal.ZERO) <= 0) {
+            throw new IllegalArgumentException(
+                    "Enter Accepted Qty greater than zero before updating inventory — only the accepted quantity is released.");
+        }
+        if (hasCriticalFail(ins)) {
+            throw new IllegalArgumentException("Cannot update inventory: critical characteristic failure. Use Hold instead.");
+        }
+        validateQuantities(ins);
+        ins.setInspectionStatus(APPROVED);
+        ins.setDecisionStatus("PASS");
+        ins.setFinalDecision("PASS");
+        ins.setApprovedBy(user);
+        ins.setApprovedAt(Instant.now());
+        ins.setSignedAt(Instant.now());
+        ins.setIsLocked(true);
+        ins.setHoldSince(null);
+        ins.setStockSyncKey(ins.getDocNo() + ":QC_RELEASE");
+        ins.setStockSyncStatus("PENDING");
+        ins.setUpdatedAt(Instant.now());
+        recordStatusChange(ins, from, APPROVED, user, "Update Inventory — accepted quantity released to store");
+        sendQualityNotification(ins, APPROVED, "Accepted quantity released to store");
         autoCreateTestCertificate(ins, user);
         publisher.publishEvent(new QualityInspectionApprovedEvent(
                 ins.getId(), "RELEASE", ins.getStockSyncKey(), user));
@@ -837,6 +918,7 @@ public class QualityInspectionService {
         if (insp != null && recv != null && insp.compareTo(recv) > 0) {
             throw new IllegalArgumentException("Inspection quantity cannot exceed received quantity");
         }
+        validateAggregateInspectionQuantity(ins);
         BigDecimal sum = BigDecimal.ZERO;
         sum = sum.add(nz(ins.getAcceptedQuantity()));
         sum = sum.add(nz(ins.getRejectedQuantity()));
@@ -854,6 +936,40 @@ public class QualityInspectionService {
     }
 
     private BigDecimal nz(BigDecimal v) { return v == null ? BigDecimal.ZERO : v; }
+
+    /**
+     * FRS gap fix: a single inspection's own inspectionQuantity was already checked against the
+     * Inward's receivedQuantity, but nothing stopped several partial inspections against the same
+     * Inward line from together exceeding what was actually received. Sums inspectionQuantity across
+     * every other non-cancelled QC record sharing the same source Inward + item + batch and rejects
+     * the save if the combined total would exceed the Inward line's receivedQuantity.
+     */
+    private void validateAggregateInspectionQuantity(QualityInspection ins) {
+        if (ins.getSourceNumber() == null || ins.getSourceNumber().isBlank()) return;
+        if (ins.getItemCode() == null || ins.getItemCode().isBlank()) return;
+        if (ins.getReceivedQuantity() == null) return;
+
+        String batch = ins.getBatchNumber() != null ? ins.getBatchNumber() : "";
+        String jpql = "select coalesce(sum(q.inspectionQuantity), 0) from QualityInspection q " +
+                "where q.sourceNumber = :src and q.itemCode = :item " +
+                "and coalesce(q.batchNumber, '') = :batch " +
+                "and q.inspectionStatus <> 'CANCELLED'" +
+                (ins.getId() != null ? " and q.id <> :selfId" : "");
+        TypedQuery<BigDecimal> query = em.createQuery(jpql, BigDecimal.class)
+                .setParameter("src", ins.getSourceNumber())
+                .setParameter("item", ins.getItemCode())
+                .setParameter("batch", batch);
+        if (ins.getId() != null) query.setParameter("selfId", ins.getId());
+        BigDecimal othersTotal = nz(query.getSingleResult());
+
+        BigDecimal combined = othersTotal.add(nz(ins.getInspectionQuantity()));
+        if (combined.compareTo(ins.getReceivedQuantity()) > 0) {
+            throw new IllegalArgumentException(
+                    "Combined inspection quantity across all QC records for inward " + ins.getSourceNumber()
+                            + ", item " + ins.getItemCode() + " (" + combined
+                            + ") would exceed the received quantity (" + ins.getReceivedQuantity() + ")");
+        }
+    }
 
     private boolean hasCriticalFail(QualityInspection ins) {
         for (QualityInspectionLine l : ins.getLines()) {

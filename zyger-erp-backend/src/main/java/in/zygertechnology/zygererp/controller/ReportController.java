@@ -7,8 +7,10 @@ import in.zygertechnology.zygererp.repo.LedgerRepository;
 import in.zygertechnology.zygererp.repo.StoreMasterRepository;
 import in.zygertechnology.zygererp.service.DocumentFacade;
 import in.zygertechnology.zygererp.service.ExportService;
+import in.zygertechnology.zygererp.service.QualityInspectionService;
 import in.zygertechnology.zygererp.service.StockService;
 import in.zygertechnology.zygererp.security.RequirePermission;
+import jakarta.persistence.EntityManager;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
@@ -30,6 +32,7 @@ public class ReportController {
     private final LedgerRepository ledger;
     private final ExportService export;
     private final StoreMasterRepository stores;
+    private final EntityManager em;
 
     private static final String[] INWARD_KEYS = {"po-inward", "lo-inward", "jo-inward", "general-inward"};
     private static final String[] INWARD_LABELS = {"PO_INWARD", "LO_INWARD", "JO_INWARD", "GENERAL_INWARD"};
@@ -797,42 +800,48 @@ public class ReportController {
         Map<String, Double> inwardRates = latestInwardItemRates();
         Map<String, LocalDate> lastMove = lastItemMovement();
 
-        // One row per item (+ batch/heat) regardless of how many stores hold it — on-hand,
-        // reserved, QC-hold and value are summed across every store location instead of
-        // showing a separate row per store.
-        record ItemKey(String itemCode, String batchNo, String heatNo) {}
-        Map<ItemKey, double[]> totals = new LinkedHashMap<>(); // [onHand, reserved, qcHold, available]
+        // One row per item code regardless of how many stores or batches/heats hold it —
+        // on-hand, reserved, QC-hold and value are summed across every store location AND
+        // every batch/heat instead of splitting the same item into one row per lot. Batch/
+        // heat-level detail is still available via the Traceability Viewer and stock ledger;
+        // this report is a per-item summary, so receiving or issuing stock for an item must
+        // update this single aggregated row, never add another row for the same item code.
+        Map<String, double[]> totals = new LinkedHashMap<>(); // [onHand, reserved, qcHold, available]
+        Map<String, Set<String>> batchesByItem = new LinkedHashMap<>();
+        Map<String, Set<String>> heatsByItem = new LinkedHashMap<>();
         for (StockService.Balance b : allBalances.values()) {
             if (b.onHand() <= 0 && b.reserved() <= 0) continue;
             if (!isEmpty(q.get("location")) && !q.get("location").equals(b.loc())) continue;
             if (!isEmpty(q.get("itemCode")) && !q.get("itemCode").equals(b.item())) continue;
-            double[] a = totals.computeIfAbsent(new ItemKey(b.item(), b.batch(), b.heat()), x -> new double[4]);
+            double[] a = totals.computeIfAbsent(b.item(), x -> new double[4]);
             a[0] += b.onHand();
             a[1] += b.reserved();
             a[2] += b.qcHold();
             a[3] += b.available();
+            if (!str(b.batch()).isBlank()) batchesByItem.computeIfAbsent(b.item(), x -> new LinkedHashSet<>()).add(b.batch());
+            if (!str(b.heat()).isBlank()) heatsByItem.computeIfAbsent(b.item(), x -> new LinkedHashSet<>()).add(b.heat());
         }
 
         long n = 0;
-        for (Map.Entry<ItemKey, double[]> en : totals.entrySet()) {
-            ItemKey key = en.getKey();
+        for (Map.Entry<String, double[]> en : totals.entrySet()) {
+            String itemCode = en.getKey();
             double[] a = en.getValue();
             double onHand = a[0], reserved = a[1], qcHold = a[2], available = a[3];
-            ItemMaster it = items.findByCode(key.itemCode()).orElse(null);
+            ItemMaster it = items.findByCode(itemCode).orElse(null);
             boolean low = it != null && onHand < (it.getSafetyStock() == null ? 0 : it.getSafetyStock().doubleValue());
             if ("true".equals(q.get("lowStockOnly")) && !low) continue;
-            double rate = itemRate(it, inwardRates, key.itemCode(), key.batchNo());
+            double rate = itemRate(it, inwardRates, itemCode, null);
             Map<String, Object> r = new LinkedHashMap<>();
             r.put("id", "s" + (++n));
-            r.put("itemCode", key.itemCode());
+            r.put("itemCode", itemCode);
             r.put("itemName", it == null ? "" : it.getDescription());
             r.put("specification", it == null ? "" : str(it.getSpecification()));
             r.put("category", it == null ? "" : it.getCategory());
             r.put("itemType", it == null ? "" : str(it.getItemType()));
             r.put("itemGroup", it == null ? "" : groupName(it));
             r.put("uom", it == null ? "" : it.getUom());
-            r.put("batchNo", key.batchNo());
-            r.put("heatNo", key.heatNo());
+            r.put("batchNo", String.join(", ", batchesByItem.getOrDefault(itemCode, Set.of())));
+            r.put("heatNo", String.join(", ", heatsByItem.getOrDefault(itemCode, Set.of())));
             r.put("onHand", round(onHand));
             r.put("reserved", round(reserved));
             r.put("qcHold", round(qcHold));
@@ -846,11 +855,12 @@ public class ReportController {
             r.put("reorderQty", it == null || it.getReorderQty() == null ? null : round(it.getReorderQty().doubleValue()));
             r.put("suggestedOrderQty", it == null ? 0d : round(suggestedOrderQty(it)));
             r.put("reorderStatus", reorderStatus(onHand, it));
-            r.put("lastMovementDate", lastMove.get(key.itemCode()));
+            r.put("lastMovementDate", lastMove.get(itemCode));
             r.put("lowStock", low);
             r.put("status", availabilityStatus(onHand, available, low));
+            r.put("sourceTrace", sourceTrace(itemCode, null, null));
             rows.add(r);
-            seenItems.add(key.itemCode());
+            seenItems.add(itemCode);
         }
         if (includeZero) {
             Map<String, StockService.Balance> bal = stock.balances();
@@ -897,6 +907,7 @@ public class ReportController {
                 r.put("lastMovementDate", lastMove.get(it.getCode()));
                 r.put("lowStock", low);
                 r.put("status", "NOT_AVAILABLE");
+                r.put("sourceTrace", "");
                 rows.add(r);
             }
         }
@@ -1372,6 +1383,36 @@ public class ReportController {
         if (!isEmpty(from) && d.isBefore(LocalDate.parse(from))) return false;
         if (!isEmpty(to) && d.isAfter(LocalDate.parse(to))) return false;
         return true;
+    }
+
+    /**
+     * FRS gap fix: reads Stock Qty -> QC Ref -> Inward Ref backward so a balance row can be
+     * traced to its origin without a manual join. Walks the ledger for the earliest inbound
+     * movement of this item+batch+heat; if that movement came from a QC release/pass, follows
+     * the QualityInspection's own sourceNumber back to the originating Inward Entry.
+     */
+    private String sourceTrace(String itemCode, String batchNo, String heatNo) {
+        StockLedger origin = null;
+        for (StockLedger e : ledger.findAllByOrderByTxDateAsc()) {
+            if (!itemCode.equals(e.getItemCode())) continue;
+            if (batchNo != null && !str(batchNo).equals(str(e.getBatchNo()))) continue;
+            if (heatNo != null && !str(heatNo).equals(str(e.getHeatNo()))) continue;
+            if (e.getInQty() == null || e.getInQty().compareTo(BigDecimal.ZERO) <= 0) continue;
+            boolean isInward = Arrays.asList(INWARD_KEYS).contains(e.getDocType());
+            boolean isQcRelease = QualityInspectionService.KEY.equals(e.getDocType());
+            if (isInward || isQcRelease) { origin = e; break; }
+        }
+        if (origin == null) return "";
+        if (QualityInspectionService.KEY.equals(origin.getDocType())) {
+            String inwardNo = em.createQuery(
+                            "select q.sourceNumber from QualityInspection q where q.docNo = :docNo", String.class)
+                    .setParameter("docNo", origin.getDocNo())
+                    .getResultStream().findFirst().orElse(null);
+            return (inwardNo != null && !inwardNo.isBlank())
+                    ? inwardNo + " → QC " + origin.getDocNo()
+                    : "QC " + origin.getDocNo();
+        }
+        return "Inward " + origin.getDocNo();
     }
 
     private boolean isEmpty(String s) { return s == null || s.isEmpty(); }

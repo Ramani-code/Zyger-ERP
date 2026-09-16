@@ -69,6 +69,15 @@ export interface InspectionCreatePayload {
   remarks?: string;
 }
 
+export interface DecisionQuantitiesPayload {
+  acceptedQuantity?: number;
+  rejectedQuantity?: number;
+  reworkQuantity?: number;
+  holdQuantity?: number;
+  location?: string;
+  remarks?: string;
+}
+
 export interface InspectionLineDto {
   id: number;
   balloonNo?: string;

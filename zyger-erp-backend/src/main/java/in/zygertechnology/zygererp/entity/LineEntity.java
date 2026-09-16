@@ -15,5 +15,6 @@ public interface LineEntity {
     default BigDecimal getTaxAmount() { return null; }
     default BigDecimal getNetAmount() { return null; }
     default String getRejectedReason() { return null; }
+    default BigDecimal getAcceptedQty() { return null; }
 }
 
