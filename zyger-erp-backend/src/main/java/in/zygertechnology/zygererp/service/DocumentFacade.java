@@ -2013,7 +2013,9 @@ public class DocumentFacade {
                 } catch (Exception ignored) {}
             }
 
+            int lineIdx = 0;
             for (LineEntity l : e.getLines()) {
+                lineIdx++;
                 String loc = firstNonEmpty(l.getLocation(), headerStr(e, "sourceLocation"), headerStr(e, "storeLocation"),
                         originalDocLoc == null ? "" : originalDocLoc);
                 if (loc.isEmpty() && allotmentDoc != null) {
@@ -2079,7 +2081,11 @@ public class DocumentFacade {
                     // fully rejected at receipt (acceptedQty 0) posts no stock movement at all.
                     BigDecimal accepted = l.getAcceptedQty();
                     if (accepted == null || accepted.signum() <= 0) continue;
-                    out.add(new LedgerLine(l.getItemCode(), loc, l.getBatchNo(), l.getHeatNo(), accepted.doubleValue(), null, null));
+                    // Each inward line must carry a distinct txSuffix — the stock ledger's
+                    // duplicate-post guard keys only on (docNo, docType, txType), so without a
+                    // per-line suffix every line after the first collides with line 1's entry
+                    // and is silently dropped as a "duplicate," even though qty/item/location differ.
+                    out.add(new LedgerLine(l.getItemCode(), loc, l.getBatchNo(), l.getHeatNo(), accepted.doubleValue(), null, "_LINE_" + lineIdx));
                 } else {
                     out.add(new LedgerLine(l.getItemCode(), loc, l.getBatchNo(), l.getHeatNo(), l.getQty().doubleValue(), null, null));
                 }
@@ -2950,14 +2956,20 @@ public class DocumentFacade {
     private void reverseInwardStock(String key, DocEntity e, String user) {
         if (e.getLines() == null) return;
         LocalDate now = LocalDate.now();
-        String txType = key.toUpperCase().replace("-", "_") + "_CANCEL";
+        String baseTxType = key.toUpperCase().replace("-", "_") + "_CANCEL";
+        int lineIdx = 0;
         for (LineEntity line : e.getLines()) {
+            lineIdx++;
             // Only the Accepted Qty was ever posted (see collectLines()) — reversing the raw
             // Received Qty here would overshoot whatever's actually in stock for this line.
             BigDecimal qty = DIRECT_POST_INWARD_KEYS.contains(key) ? line.getAcceptedQty() : line.getQty();
             if (qty == null || qty.compareTo(BigDecimal.ZERO) <= 0) continue;
             String loc = line.getLocation() != null && !line.getLocation().isBlank()
                     ? line.getLocation() : "MAIN";
+            // Must match the per-line txType collectLines() used when posting, and stay unique
+            // per line for the same duplicate-post-guard reason (see collectLines()) — otherwise
+            // only the first line's stock-in is ever reversed on cancel.
+            String txType = baseTxType + "_LINE_" + lineIdx;
             try {
                 stockService.reverseInwardStock(e.getDocNo(), key, txType,
                         line.getItemCode(), loc, line.getBatchNo(), line.getHeatNo(),

@@ -367,8 +367,9 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
         });
       }
 
-      // Pre-seed default characteristic inspection lines if only 1 blank line exists
-      const typeTemplates = TYPE_TEMPLATES[header.inspectionType as InspectionType];
+      // Pre-seed default characteristic inspection lines if only 1 blank line exists.
+      // Skipped for IQC — that flow doesn't use the characteristics grid at all.
+      const typeTemplates = header.inspectionType === 'IQC' ? null : TYPE_TEMPLATES[header.inspectionType as InspectionType];
       if (typeTemplates && typeTemplates.length > 0) {
         setDraftLines((lines) => {
           if (lines.length <= 1 && (!lines[0]?.characteristicCode || lines[0]?.characteristicCode === '')) {
@@ -405,7 +406,7 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
 
   // Auto-load InspectionPlan characteristics when item code + type are set
   useEffect(() => {
-    if (!isCreateMode || !header.itemCode.trim() || !header.inspectionType) {
+    if (!isCreateMode || !header.itemCode.trim() || !header.inspectionType || header.inspectionType === 'IQC') {
       setPlanCharacteristics([]);
       return;
     }
@@ -767,6 +768,10 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
   }
 
   const docNo = inspection?.docNo ?? nextNumber;
+  // Inward (IQC) inspection is meant to be a plain accept/reject-and-store-update step,
+  // not a full dimensional/process inspection — hide the characteristics grid, SPC chart,
+  // and machine/drawing/certificate fields that don't apply to a raw-material receipt.
+  const isIqc = header.inspectionType === 'IQC';
 
   return (
     <>
@@ -850,7 +855,7 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
               </select>
             </label>
 
-            {isCreateMode && (
+            {isCreateMode && !isIqc && (
               <label className="fld">
                 <span>&nbsp;</span>
                 <button
@@ -939,66 +944,74 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
               />
             </label>
 
-            <label className="fld">
-              <span>Material Grade / Specification</span>
-              <input
-                className="in"
-                placeholder="e.g. SS304, AL6061-T6, EN8"
-                value={header.materialGrade}
-                readOnly={!isCreateMode && !measurementsEditable}
-                onChange={(event) =>
-                  setHeader((current) => ({ ...current, materialGrade: event.target.value }))
-                }
-              />
-            </label>
-
-            <label className="fld">
-              <span>MTC / CoC Verified?</span>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
+            {!isIqc && (
+              <label className="fld">
+                <span>Material Grade / Specification</span>
                 <input
-                  type="checkbox"
-                  id="mtcVerifiedCheck"
-                  checked={header.mtcVerified}
-                  disabled={!isCreateMode && !measurementsEditable}
+                  className="in"
+                  placeholder="e.g. SS304, AL6061-T6, EN8"
+                  value={header.materialGrade}
+                  readOnly={!isCreateMode && !measurementsEditable}
                   onChange={(event) =>
-                    setHeader((current) => ({ ...current, mtcVerified: event.target.checked }))
+                    setHeader((current) => ({ ...current, materialGrade: event.target.value }))
                   }
                 />
-                <label htmlFor="mtcVerifiedCheck" style={{ fontSize: '0.82rem', cursor: 'pointer', margin: 0 }}>
-                  Mill Test Cert Verified
-                </label>
-              </div>
-            </label>
+              </label>
+            )}
 
-            <label className="fld">
-              <span>MTC Certificate No</span>
-              <input
-                className="in"
-                placeholder="e.g. MTC-2026-904"
-                value={header.mtcNumber}
-                readOnly={!isCreateMode && !measurementsEditable}
-                onChange={(event) =>
-                  setHeader((current) => ({ ...current, mtcNumber: event.target.value }))
-                }
-              />
-            </label>
+            {!isIqc && (
+              <label className="fld">
+                <span>MTC / CoC Verified?</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
+                  <input
+                    type="checkbox"
+                    id="mtcVerifiedCheck"
+                    checked={header.mtcVerified}
+                    disabled={!isCreateMode && !measurementsEditable}
+                    onChange={(event) =>
+                      setHeader((current) => ({ ...current, mtcVerified: event.target.checked }))
+                    }
+                  />
+                  <label htmlFor="mtcVerifiedCheck" style={{ fontSize: '0.82rem', cursor: 'pointer', margin: 0 }}>
+                    Mill Test Cert Verified
+                  </label>
+                </div>
+              </label>
+            )}
 
-            <label className="fld">
-              <span>NDT / Ultrasonic Clearance</span>
-              <select
-                className="in"
-                value={header.ndtStatus}
-                disabled={!isCreateMode && !measurementsEditable}
-                onChange={(event) =>
-                  setHeader((current) => ({ ...current, ndtStatus: event.target.value }))
-                }
-              >
-                <option value="NA">N/A (Not Applicable)</option>
-                <option value="PASS">PASS (UT Cleared)</option>
-                <option value="FAIL">FAIL (Defect Detected)</option>
-                <option value="PENDING">PENDING (Testing Underway)</option>
-              </select>
-            </label>
+            {!isIqc && (
+              <label className="fld">
+                <span>MTC Certificate No</span>
+                <input
+                  className="in"
+                  placeholder="e.g. MTC-2026-904"
+                  value={header.mtcNumber}
+                  readOnly={!isCreateMode && !measurementsEditable}
+                  onChange={(event) =>
+                    setHeader((current) => ({ ...current, mtcNumber: event.target.value }))
+                  }
+                />
+              </label>
+            )}
+
+            {!isIqc && (
+              <label className="fld">
+                <span>NDT / Ultrasonic Clearance</span>
+                <select
+                  className="in"
+                  value={header.ndtStatus}
+                  disabled={!isCreateMode && !measurementsEditable}
+                  onChange={(event) =>
+                    setHeader((current) => ({ ...current, ndtStatus: event.target.value }))
+                  }
+                >
+                  <option value="NA">N/A (Not Applicable)</option>
+                  <option value="PASS">PASS (UT Cleared)</option>
+                  <option value="FAIL">FAIL (Defect Detected)</option>
+                  <option value="PENDING">PENDING (Testing Underway)</option>
+                </select>
+              </label>
+            )}
 
             <label className="fld">
               <span>
@@ -1063,37 +1076,41 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
               />
             </label>
 
-            <label className="fld">
-              <span>
-                Inspection Qty <em>*</em>
-              </span>
-              <input
-                type="number"
-                className="in"
-                value={header.inspectionQuantity}
-                readOnly={!isCreateMode && !measurementsEditable}
-                onChange={(event) =>
-                  setHeader((current) => ({ ...current, inspectionQuantity: event.target.value }))
-                }
-              />
-              {aqlResult && (
-                <span className="text-xs text-blue-600 mt-0.5">
-                  AQL sample: {aqlResult.sampleSize} | Accept: {aqlResult.acceptNumber} | Reject: {aqlResult.rejectNumber}
+            {!isIqc && (
+              <label className="fld">
+                <span>
+                  Inspection Qty <em>*</em>
                 </span>
-              )}
-            </label>
+                <input
+                  type="number"
+                  className="in"
+                  value={header.inspectionQuantity}
+                  readOnly={!isCreateMode && !measurementsEditable}
+                  onChange={(event) =>
+                    setHeader((current) => ({ ...current, inspectionQuantity: event.target.value }))
+                  }
+                />
+                {aqlResult && (
+                  <span className="text-xs text-blue-600 mt-0.5">
+                    AQL sample: {aqlResult.sampleSize} | Accept: {aqlResult.acceptNumber} | Reject: {aqlResult.rejectNumber}
+                  </span>
+                )}
+              </label>
+            )}
 
-            <label className="fld">
-              <span>Lot No</span>
-              <input
-                className="in"
-                value={header.lotNumber}
-                readOnly={!isCreateMode && !measurementsEditable}
-                onChange={(event) =>
-                  setHeader((current) => ({ ...current, lotNumber: event.target.value }))
-                }
-              />
-            </label>
+            {!isIqc && (
+              <label className="fld">
+                <span>Lot No</span>
+                <input
+                  className="in"
+                  value={header.lotNumber}
+                  readOnly={!isCreateMode && !measurementsEditable}
+                  onChange={(event) =>
+                    setHeader((current) => ({ ...current, lotNumber: event.target.value }))
+                  }
+                />
+              </label>
+            )}
 
             <label className="fld">
               <span>Batch No</span>
@@ -1107,17 +1124,19 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
               />
             </label>
 
-            <label className="fld">
-              <span>Serial No</span>
-              <input
-                className="in"
-                value={header.serialNumber}
-                readOnly={!isCreateMode && !measurementsEditable}
-                onChange={(event) =>
-                  setHeader((current) => ({ ...current, serialNumber: event.target.value }))
-                }
-              />
-            </label>
+            {!isIqc && (
+              <label className="fld">
+                <span>Serial No</span>
+                <input
+                  className="in"
+                  value={header.serialNumber}
+                  readOnly={!isCreateMode && !measurementsEditable}
+                  onChange={(event) =>
+                    setHeader((current) => ({ ...current, serialNumber: event.target.value }))
+                  }
+                />
+              </label>
+            )}
 
             <label className="fld">
               <span>Heat No</span>
@@ -1131,93 +1150,107 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
               />
             </label>
 
-            <label className="fld">
-              <span>CNC Machine / Equip ID</span>
-              <input
-                className="in"
-                placeholder="e.g. VMC-01, CNC-LATHE-02"
-                value={header.machine}
-                readOnly={!isCreateMode && !measurementsEditable}
-                onChange={(event) =>
-                  setHeader((current) => ({ ...current, machine: event.target.value }))
-                }
-              />
-            </label>
+            {!isIqc && (
+              <label className="fld">
+                <span>CNC Machine / Equip ID</span>
+                <input
+                  className="in"
+                  placeholder="e.g. VMC-01, CNC-LATHE-02"
+                  value={header.machine}
+                  readOnly={!isCreateMode && !measurementsEditable}
+                  onChange={(event) =>
+                    setHeader((current) => ({ ...current, machine: event.target.value }))
+                  }
+                />
+              </label>
+            )}
 
-            <label className="fld">
-              <span>Operation No / Name</span>
-              <input
-                className="in"
-                placeholder="e.g. Op 10 Turning"
-                value={header.operation}
-                readOnly={!isCreateMode && !measurementsEditable}
-                onChange={(event) =>
-                  setHeader((current) => ({ ...current, operation: event.target.value }))
-                }
-              />
-            </label>
+            {!isIqc && (
+              <label className="fld">
+                <span>Operation No / Name</span>
+                <input
+                  className="in"
+                  placeholder="e.g. Op 10 Turning"
+                  value={header.operation}
+                  readOnly={!isCreateMode && !measurementsEditable}
+                  onChange={(event) =>
+                    setHeader((current) => ({ ...current, operation: event.target.value }))
+                  }
+                />
+              </label>
+            )}
 
-            <label className="fld">
-              <span>CNC Program No</span>
-              <input
-                className="in"
-                placeholder="e.g. O1002"
-                value={header.programNumber}
-                readOnly={!isCreateMode && !measurementsEditable}
-                onChange={(event) =>
-                  setHeader((current) => ({ ...current, programNumber: event.target.value }))
-                }
-              />
-            </label>
+            {!isIqc && (
+              <label className="fld">
+                <span>CNC Program No</span>
+                <input
+                  className="in"
+                  placeholder="e.g. O1002"
+                  value={header.programNumber}
+                  readOnly={!isCreateMode && !measurementsEditable}
+                  onChange={(event) =>
+                    setHeader((current) => ({ ...current, programNumber: event.target.value }))
+                  }
+                />
+              </label>
+            )}
 
-            <label className="fld">
-              <span>Setup No</span>
-              <input
-                className="in"
-                placeholder="e.g. Setup 1"
-                value={header.setupNumber}
-                readOnly={!isCreateMode && !measurementsEditable}
-                onChange={(event) =>
-                  setHeader((current) => ({ ...current, setupNumber: event.target.value }))
-                }
-              />
-            </label>
+            {!isIqc && (
+              <label className="fld">
+                <span>Setup No</span>
+                <input
+                  className="in"
+                  placeholder="e.g. Setup 1"
+                  value={header.setupNumber}
+                  readOnly={!isCreateMode && !measurementsEditable}
+                  onChange={(event) =>
+                    setHeader((current) => ({ ...current, setupNumber: event.target.value }))
+                  }
+                />
+              </label>
+            )}
 
-            <label className="fld">
-              <span>Drawing No</span>
-              <input
-                className="in"
-                value={header.drawingNumber}
-                readOnly={!isCreateMode && !measurementsEditable}
-                onChange={(event) =>
-                  setHeader((current) => ({ ...current, drawingNumber: event.target.value }))
-                }
-              />
-            </label>
+            {!isIqc && (
+              <label className="fld">
+                <span>Drawing No</span>
+                <input
+                  className="in"
+                  value={header.drawingNumber}
+                  readOnly={!isCreateMode && !measurementsEditable}
+                  onChange={(event) =>
+                    setHeader((current) => ({ ...current, drawingNumber: event.target.value }))
+                  }
+                />
+              </label>
+            )}
 
-            <label className="fld">
-              <span>Drawing Rev</span>
-              <input
-                className="in"
-                value={header.drawingRevision}
-                readOnly={!isCreateMode && !measurementsEditable}
-                onChange={(event) =>
-                  setHeader((current) => ({ ...current, drawingRevision: event.target.value }))
-                }
-              />
-            </label>
+            {!isIqc && (
+              <label className="fld">
+                <span>Drawing Rev</span>
+                <input
+                  className="in"
+                  value={header.drawingRevision}
+                  readOnly={!isCreateMode && !measurementsEditable}
+                  onChange={(event) =>
+                    setHeader((current) => ({ ...current, drawingRevision: event.target.value }))
+                  }
+                />
+              </label>
+            )}
 
-            <label className="fld">
-              <span>Inspector / Operator</span>
-              <input
-                className="in"
-                value={header.inspector}
-                readOnly={!isCreateMode && !measurementsEditable}
-                onChange={(event) =>
-                  setHeader((current) => ({ ...current, inspector: event.target.value }))
-                }
-              />
-            </label>
+            {!isIqc && (
+              <label className="fld">
+                <span>Inspector / Operator</span>
+                <input
+                  className="in"
+                  value={header.inspector}
+                  readOnly={!isCreateMode && !measurementsEditable}
+                  onChange={(event) =>
+                    setHeader((current) => ({ ...current, inspector: event.target.value }))
+                  }
+                />
+              </label>
+            )}
 
             <label className="fld">
               <span>Accepted Qty</span>
@@ -1257,31 +1290,35 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
               />
             </label>
 
-            <label className="fld">
-              <span>Rework Qty</span>
-              <input
-                type="number"
-                className="in"
-                value={header.reworkQuantity}
-                readOnly={!isCreateMode && !measurementsEditable}
-                onChange={(event) =>
-                  setHeader((current) => ({ ...current, reworkQuantity: event.target.value }))
-                }
-              />
-            </label>
+            {!isIqc && (
+              <label className="fld">
+                <span>Rework Qty</span>
+                <input
+                  type="number"
+                  className="in"
+                  value={header.reworkQuantity}
+                  readOnly={!isCreateMode && !measurementsEditable}
+                  onChange={(event) =>
+                    setHeader((current) => ({ ...current, reworkQuantity: event.target.value }))
+                  }
+                />
+              </label>
+            )}
 
-            <label className="fld">
-              <span>Hold Qty</span>
-              <input
-                type="number"
-                className="in"
-                value={header.holdQuantity}
-                readOnly={!isCreateMode && !measurementsEditable}
-                onChange={(event) =>
-                  setHeader((current) => ({ ...current, holdQuantity: event.target.value }))
-                }
-              />
-            </label>
+            {!isIqc && (
+              <label className="fld">
+                <span>Hold Qty</span>
+                <input
+                  type="number"
+                  className="in"
+                  value={header.holdQuantity}
+                  readOnly={!isCreateMode && !measurementsEditable}
+                  onChange={(event) =>
+                    setHeader((current) => ({ ...current, holdQuantity: event.target.value }))
+                  }
+                />
+              </label>
+            )}
 
             <label className="fld span2">
               <span>Remarks</span>
@@ -1297,7 +1334,9 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
           </div>
         </div>
 
-        {/* Dynamic characteristics grid — plan-driven or manual */}
+        {/* Dynamic characteristics grid — plan-driven or manual. Not shown for Inward (IQC):
+            that flow is a plain accept/reject + stock update, not a dimensional inspection. */}
+        {!isIqc && (
         <div className="panel">
           <div className="panel-h">
             <h2>
@@ -1394,8 +1433,9 @@ export default function QualityForm({ documentId, viewOnly = false, onBack, defa
             </div>
           )}
         </div>
+        )}
 
-        {header.itemCode && (
+        {!isIqc && header.itemCode && (
           <div className="panel">
             <div className="panel-h">
               <h2 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>

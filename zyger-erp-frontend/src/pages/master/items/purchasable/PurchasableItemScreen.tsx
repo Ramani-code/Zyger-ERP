@@ -518,7 +518,7 @@ export default function PurchasableItemScreen() {
                       <td className="cell-b">{r.code}</td>
                       <td><b>{r.description}</b></td>
                       <td>{(itemGroupRows.find(g => g.code === r.itemGroup || g.name === r.itemGroup || String(g.id) === String(r.itemGroup))?.name ?? r.itemGroup) || '—'}</td>
-                      <td>{r.uom}</td>
+                      <td>{uomOptions.find(u => u.code === r.uom)?.name ?? r.uom}</td>
                       <td className="num">₹{r.purchaseRate || 0}</td>
                       <td className="num">₹{r.sellingRate || 0}</td>
                       <td>
@@ -642,7 +642,7 @@ export default function PurchasableItemScreen() {
                   <select className="in" value={form.uom} onChange={e => setFld('uom', e.target.value)}>
                     <option value="">Select...</option>
                     {uomOptions.length > 0 ? (
-                      uomOptions.map(u => <option key={u.id} value={u.code}>{u.code} - {u.name}</option>)
+                      uomOptions.map(u => <option key={u.id} value={u.code}>{u.name}</option>)
                     ) : (
                       <option value="NOS">NOS</option>
                     )}
@@ -981,7 +981,7 @@ export default function PurchasableItemScreen() {
                   <span>UOM</span>
                   <select className="in" value={form.dimensionUom} onChange={e => setFld('dimensionUom', e.target.value)}>
                     <option value="">Select...</option>
-                    {uomOptions.length > 0 && uomOptions.filter(u => ['MM', 'CM', 'MTR', 'INCH', 'FT'].includes(u.code)).map(u => <option key={u.id} value={u.code}>{u.code} - {u.name}</option>)}
+                    {uomOptions.length > 0 && uomOptions.filter(u => ['MM', 'CM', 'MTR', 'INCH', 'FT'].includes(u.code)).map(u => <option key={u.id} value={u.code}>{u.name}</option>)}
                   </select>
                 </label>
                 <label className="fld">
