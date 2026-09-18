@@ -85,7 +85,8 @@ class SalesControllerIntegrationTest extends AbstractPostgresIntegrationTest {
                         .content(objectMapper.writeValueAsString(body)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.docNo").exists())
-                .andExpect(jsonPath("$.status").value("DRAFT"));
+                // Sales Order has no submit/approve workflow — it's created CONFIRMED directly.
+                .andExpect(jsonPath("$.status").value("CONFIRMED"));
     }
 
     @Test

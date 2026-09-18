@@ -382,7 +382,7 @@ public class QualityController {
     private List<Map<String, Object>> waitingQcRows(String inspectionType, String priority,
                                                     String inspector, String itemCode) {
         List<Map<String, Object>> rows = new ArrayList<>();
-        for (String k : List.of("po-inward", "lo-inward", "jo-inward", "general-inward", "grn")) {
+        for (String k : List.of("po-inward", "lo-inward", "jo-inward", "general-inward", "grn", "dc-return", "invoice-return")) {
             for (Map<String, Object> row : docs.awaitingQcDocRows(k)) {
                 if (inspectionType != null && !inspectionType.isBlank()
                         && !inspectionType.equalsIgnoreCase(String.valueOf(row.get("inspectionType")))) continue;

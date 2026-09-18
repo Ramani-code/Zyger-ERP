@@ -24,6 +24,7 @@ public class SalesOrder extends BaseDoc implements DocEntity {
     @Column(name="billing_address", length=500) String billingAddress;
     @Column(name="shipping_address", length=500) String shippingAddress;
     @Column(length=30) String currency;
+    @Column(name="exchange_rate", precision=18, scale=6) BigDecimal exchangeRate = BigDecimal.ONE;
     /** GST compliance — customer's GSTIN, captured at order time. */
     @Column(name="customer_gstin", length=15) String customerGstin;
     /** GST state code determining CGST+SGST vs IGST on the resulting invoice. */
@@ -41,6 +42,10 @@ public class SalesOrder extends BaseDoc implements DocEntity {
     @Column(name="so_type", length=30) String soType;
     /** FRS §4.8: generic terms and conditions */
     @Column(name="terms_and_conditions", columnDefinition="TEXT") String termsAndConditions;
+    @Column(name="target_delivery_date") LocalDate targetDeliveryDate;
+    @Column(name="credit_limit_status", length=30) String creditLimitStatus;
+    @Column(name="compliance_checklist", length=60) String complianceChecklist;
+    @Column(name="delivery_status", length=30) String deliveryStatus;
 
     @Column(name="ordered_qty") BigDecimal orderedQty;
     @Column(name="produced_qty") BigDecimal producedQty;

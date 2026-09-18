@@ -758,11 +758,7 @@ public class PrintService {
         body.append(footerNote(printedAt(str(doc.get("docNo")), copyNumber)));
         body.append(computerGenerated("This is a Computer Generated " + dcTitle(type)));
 
-        boolean isPosted = Set.of("POSTED", "CONFIRMED", "RECEIVED", "APPROVED", "READY_FOR_DISPATCH",
-                "DISPATCHED", "DELIVERED", "PARTIALLY_DISPATCHED").contains(str(doc.get("status")).toUpperCase());
-        String wm = null;
-        if (!isPosted) wm = watermarkHtml("DRAFT — NOT VALID FOR DISPATCH", "watermark-draft");
-        else if (Boolean.TRUE.equals(doc.get("invoiced"))) wm = watermarkHtml("INVOICED — TAX INVOICE ISSUED", "watermark-invoiced");
+        String wm = Boolean.TRUE.equals(doc.get("invoiced")) ? watermarkHtml("INVOICED — TAX INVOICE ISSUED", "watermark-invoiced") : null;
 
         return renderPdf(dcTitle(type), body.toString(), wm);
     }
@@ -999,9 +995,7 @@ public class PrintService {
         body.append(computerGenerated("This is a Computer Generated Purchase Order"));
 
         boolean cancelled = "CANCELLED".equalsIgnoreCase(status);
-        boolean approvedOrBeyond = Set.of("APPROVED", "RELEASED", "POSTED", "PARTIALLY_RECEIVED", "FULLY_RECEIVED", "CLOSED").contains(status.toUpperCase());
-        String wm = cancelled ? watermarkHtml("CANCELLED", "watermark-cancelled")
-                : !approvedOrBeyond ? watermarkHtml("DRAFT — NOT APPROVED", "watermark-draft") : null;
+        String wm = cancelled ? watermarkHtml("CANCELLED", "watermark-cancelled") : null;
         return renderPdf("Purchase Order", body.toString(), wm);
     }
 
@@ -1098,6 +1092,22 @@ public class PrintService {
     }
 
     public byte[] salesInvoice(Map<String, Object> doc, int copyNumber) {
+        return renderInvoice(doc, copyNumber, false);
+    }
+
+    /** Proforma Invoice — same GST layout as the Tax Invoice but titled
+     * PROFORMA INVOICE, with PI-specific meta (validity / expected delivery /
+     * sales person), no IRN/e-way bill block and no header QR code, and line
+     * quantities read from the qty field instead of billedQty. */
+    public byte[] proformaInvoice(Map<String, Object> doc) {
+        return proformaInvoice(doc, 1);
+    }
+
+    public byte[] proformaInvoice(Map<String, Object> doc, int copyNumber) {
+        return renderInvoice(doc, copyNumber, true);
+    }
+
+    private byte[] renderInvoice(Map<String, Object> doc, int copyNumber, boolean proforma) {
         CompanyInfo ci = companyInfos.findById(1L).orElse(null);
 
         // ---- Compute totals + per-rate tax breakdown up front so the header
@@ -1106,7 +1116,7 @@ public class PrintService {
         java.util.TreeMap<Integer, BigDecimal[]> byRate = new java.util.TreeMap<>(); // rate% -> [taxable, tax]
         for (Object o : lines(doc)) {
             @SuppressWarnings("unchecked") Map<String, Object> line = (Map<String, Object>) o;
-            BigDecimal qty = bd(line.get("billedQty"));
+            BigDecimal qty = proforma ? bd(line.get("qty")) : bd(line.get("billedQty"));
             BigDecimal rate = bd(line.get("unitPrice"));
             BigDecimal taxAmt = bd(line.get("taxAmount"));
             BigDecimal net = line.get("netAmount") != null ? bd(line.get("netAmount")) : qty.multiply(rate).add(taxAmt);
@@ -1120,33 +1130,45 @@ public class PrintService {
         BigDecimal roundOff = roundedGrand.subtract(grandTotal);
 
         StringBuilder body = new StringBuilder();
-        body.append(invoiceHeader(doc, ci, taxableTotal, taxTotal, grandTotal));
-        body.append("<div class=\"banner-title\">TAX INVOICE</div>");
+        body.append(invoiceHeader(doc, ci, taxableTotal, taxTotal, grandTotal, proforma));
+        body.append("<div class=\"banner-title\">").append(proforma ? "PROFORMA INVOICE" : "TAX INVOICE").append("</div>");
         if (copyNumber > 1) body.append(copyLabelHtml(copyNumber));
 
         // 3. Invoice meta & transportation details
         body.append("<table class=\"border-bottom\"><tr>");
-        body.append("<td style=\"width:50%;\" class=\"border-right\">").append(invoiceKvTable(List.of(
-                invoiceKvRow("Invoice No", str(doc.get("docNo")), true),
-                invoiceKvRow("Invoice Date", formatDate(doc.get("date")), false),
-                invoiceKvRow("DC No", firstNonEmpty(str(doc.get("dcNo")), str(doc.get("salesDcNumber"))), false),
-                invoiceKvRow("DC Date", formatDate(doc.get("dcDate")), false),
-                invoiceKvRow("Customer Code", str(doc.get("customerCode")), false)
-        ))).append("</td>");
-        body.append("<td style=\"width:50%;\">").append(invoiceKvTable(List.of(
-                invoiceKvRow("Transport Mode", str(doc.get("transportDetails")), false),
-                invoiceKvRow("Vehicle Number", firstNonEmpty(str(doc.get("vehicleNo")), str(doc.get("vehicleNumber"))), false),
-                invoiceKvRow("Date & Time of Supply",
-                        formatDateTime(doc.get("dateTimeOfSupply") != null ? doc.get("dateTimeOfSupply") : doc.get("date"), doc.get("dateTimeOfSupply") != null), false),
-                invoiceKvRow("Place of Supply", placeOfSupplyDisplay(doc), false),
-                invoiceKvRow("Payment Terms", str(doc.get("paymentTerms")), false)
-        ))).append("</td>");
+        List<String> metaLeft = new ArrayList<>();
+        metaLeft.add(invoiceKvRow(proforma ? "PI No" : "Invoice No", str(doc.get("docNo")), true));
+        metaLeft.add(invoiceKvRow(proforma ? "PI Date" : "Invoice Date", formatDate(doc.get("date")), false));
+        if (proforma) {
+            metaLeft.add(invoiceKvRow("Ref. SO", str(doc.get("salesOrderNumber")), false));
+            metaLeft.add(invoiceKvRow("Customer Code", str(doc.get("customerCode")), false));
+        } else {
+            metaLeft.add(invoiceKvRow("DC No", firstNonEmpty(str(doc.get("dcNo")), str(doc.get("salesDcNumber"))), false));
+            metaLeft.add(invoiceKvRow("DC Date", formatDate(doc.get("dcDate")), false));
+            metaLeft.add(invoiceKvRow("Customer Code", str(doc.get("customerCode")), false));
+        }
+        body.append("<td style=\"width:50%;\" class=\"border-right\">").append(invoiceKvTable(metaLeft)).append("</td>");
+        List<String> metaRight = new ArrayList<>();
+        if (proforma) {
+            metaRight.add(invoiceKvRow("Validity Date", formatDate(doc.get("validityDate")), false));
+            metaRight.add(invoiceKvRow("Expected Delivery", formatDate(doc.get("expectedDeliveryDate")), false));
+            metaRight.add(invoiceKvRow("Sales Person", str(doc.get("salesPerson")), false));
+            metaRight.add(invoiceKvRow("Payment Terms", str(doc.get("paymentTerms")), false));
+        } else {
+            metaRight.add(invoiceKvRow("Transport Mode", str(doc.get("transportDetails")), false));
+            metaRight.add(invoiceKvRow("Vehicle Number", firstNonEmpty(str(doc.get("vehicleNo")), str(doc.get("vehicleNumber"))), false));
+            metaRight.add(invoiceKvRow("Date & Time of Supply",
+                    formatDateTime(doc.get("dateTimeOfSupply") != null ? doc.get("dateTimeOfSupply") : doc.get("date"), doc.get("dateTimeOfSupply") != null), false));
+            metaRight.add(invoiceKvRow("Place of Supply", placeOfSupplyDisplay(doc), false));
+            metaRight.add(invoiceKvRow("Payment Terms", str(doc.get("paymentTerms")), false));
+        }
+        body.append("<td style=\"width:50%;\">").append(invoiceKvTable(metaRight)).append("</td>");
         body.append("</tr></table>");
 
         // 4. E-Invoice / IRN & e-way bill block (only when data exists)
         String irn = str(doc.get("irnNumber"));
         String eway = firstNonEmpty(str(doc.get("ewayBillNo")), str(doc.get("ewayBillReference")));
-        if (!irn.isBlank() || !eway.isBlank()) {
+        if (!proforma && (!irn.isBlank() || !eway.isBlank())) {
             body.append("<table class=\"border-bottom accent-bg\"><tr><td style=\"padding:3px 6px;\">");
             List<String> irnRows = new ArrayList<>();
             irnRows.add(invoiceWideRow("IRN No:", irn));
@@ -1164,8 +1186,8 @@ public class PrintService {
         body.append("<table class=\"border-bottom\"><tr class=\"accent-bg\">");
         body.append("<th style=\"width:50%;\" class=\"border-right text-left bold\">BILLED TO (BUYER)</th>");
         body.append("<th style=\"width:50%;\" class=\"text-left bold\">SHIPPED TO (CONSIGNEE)</th></tr><tr>");
-        body.append("<td style=\"width:50%;\" class=\"border-right\">").append(invoiceKvTable(partyKvRows(doc, true))).append("</td>");
-        body.append("<td style=\"width:50%;\">").append(invoiceKvTable(partyKvRows(doc, false))).append("</td>");
+        body.append("<td style=\"width:50%;\" class=\"border-right\">").append(invoiceKvTable(partyKvRows(doc, true, proforma))).append("</td>");
+        body.append("<td style=\"width:50%;\">").append(invoiceKvTable(partyKvRows(doc, false, proforma))).append("</td>");
         body.append("</tr></table>");
 
         // 6. Items table
@@ -1194,7 +1216,7 @@ public class PrintService {
             String hsn = firstNonEmpty(str(line.get("hsnSnapshot")),
                     items.findByCode(itemCode).map(ItemMaster::getHsnCode).filter(s -> !s.isBlank()).orElse(""));
             String desc = firstNonEmpty(str(line.get("description")), str(line.get("itemName")));
-            BigDecimal qty = bd(line.get("billedQty"));
+            BigDecimal qty = proforma ? bd(line.get("qty")) : bd(line.get("billedQty"));
             BigDecimal rate = bd(line.get("unitPrice"));
             BigDecimal net = bd(line.get("netAmount"));
             int pct = taxRatePercent(line);
@@ -1286,10 +1308,8 @@ public class PrintService {
         body.append("<span class=\"bold\" style=\"font-size:9pt;\">Authorized Signatory</span></td>");
         body.append("</tr></table>");
 
-        String status = str(doc.get("status"));
-        String wm = !Set.of("POSTED", "PAID", "PARTIALLY_PAID").contains(status.toUpperCase())
-                ? watermarkHtml("DRAFT — NOT VALID", "watermark-draft") : null;
-        return renderPdf("Tax Invoice", INVOICE_CSS, "<div class=\"inv-box\">" + body + "</div>", wm);
+        String wm = null;
+        return renderPdf(proforma ? "Proforma Invoice" : "Tax Invoice", INVOICE_CSS, "<div class=\"inv-box\">" + body + "</div>", wm);
     }
 
     /** Logo (left) + company info (centre) + QR code (right) header, per invoice.html.
@@ -1297,10 +1317,15 @@ public class PrintService {
      * logo or QR is absent (an empty side cell is emitted instead). */
     private String invoiceHeader(Map<String, Object> doc, CompanyInfo ci,
                                  BigDecimal taxable, BigDecimal tax, BigDecimal grand) {
+        return invoiceHeader(doc, ci, taxable, tax, grand, false);
+    }
+
+    private String invoiceHeader(Map<String, Object> doc, CompanyInfo ci,
+                                 BigDecimal taxable, BigDecimal tax, BigDecimal grand, boolean proforma) {
         String logo = logoDataUri();
         String gstin = ci != null ? firstNonEmpty(ci.getGstin(), ci.getGstNumber()) : "";
 
-        String qr = qrDataUri(invoiceQrContent(doc, gstin, taxable, tax, grand));
+        String qr = proforma ? null : qrDataUri(invoiceQrContent(doc, gstin, taxable, tax, grand));
 
         StringBuilder sb = new StringBuilder();
         sb.append("<table class=\"border-bottom\"><tr>");
@@ -1358,8 +1383,13 @@ public class PrintService {
         return pos + (code.isBlank() ? "" : " (Code: " + code + ")");
     }
 
-    /** Billed-To / Shipped-To key-value rows. */
+    /** Billed-To / Shipped-To key-value rows. Proformas carry no GSTIN / place-of-
+     * supply data, so those rows are skipped for the proforma variant. */
     private List<String> partyKvRows(Map<String, Object> doc, boolean billed) {
+        return partyKvRows(doc, billed, false);
+    }
+
+    private List<String> partyKvRows(Map<String, Object> doc, boolean billed, boolean proforma) {
         List<String> rows = new ArrayList<>();
         String customer = str(doc.get("customer"));
         String contact = str(doc.get("contactPerson"));
@@ -1371,8 +1401,10 @@ public class PrintService {
         rows.add(invoiceKvRow("Company Name", customer, false, 32));
         rows.add(invoiceKvRow("Contact Person", contact, false, 32));
         rows.add(invoiceKvRow("Address", address, false, 32));
-        rows.add(invoiceKvRow("GSTIN", gstin, false, 32));
-        rows.add(invoiceKvRow("State Code", placeOfSupplyDisplay(doc), false, 32));
+        if (!proforma) {
+            rows.add(invoiceKvRow("GSTIN", gstin, false, 32));
+            rows.add(invoiceKvRow("State Code", placeOfSupplyDisplay(doc), false, 32));
+        }
         rows.add(invoiceKvRow("Contact No", phone, false, 32));
         rows.add(invoiceKvRow("Email ID", email, false, 32));
         return rows;

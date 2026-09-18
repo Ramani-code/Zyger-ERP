@@ -1370,10 +1370,16 @@ public class ReportController {
         }
         if (origin == null) return "";
         if (QualityInspectionService.KEY.equals(origin.getDocType())) {
-            String inwardNo = em.createQuery(
-                            "select q.sourceNumber from QualityInspection q where q.docNo = :docNo", String.class)
-                    .setParameter("docNo", origin.getDocNo())
-                    .getResultStream().findFirst().orElse(null);
+            String inwardNo = null;
+            try {
+                List<String> found = em.createQuery(
+                                "select q.sourceNumber from QualityInspection q where q.docNo = :docNo", String.class)
+                        .setParameter("docNo", origin.getDocNo())
+                        .setMaxResults(1)
+                        .getResultList();
+                if (!found.isEmpty()) inwardNo = found.get(0);
+            } catch (Exception ignored) {
+            }
             return (inwardNo != null && !inwardNo.isBlank())
                     ? inwardNo + " → QC " + origin.getDocNo()
                     : "QC " + origin.getDocNo();

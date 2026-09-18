@@ -675,7 +675,8 @@ public class SalesService {
                             BigDecimal rate = item.getUnitPrice();
                             BigDecimal disc = item.getDiscount();
                             BigDecimal net = qty.multiply(rate).subtract(disc);
-                            item.setNetAmount(net);
+                            BigDecimal taxAmt = net.multiply(item.getTax()).divide(BigDecimal.valueOf(100), 4, RoundingMode.HALF_UP).setScale(2, RoundingMode.HALF_UP);
+                            item.setNetAmount(net.add(taxAmt).setScale(2, RoundingMode.HALF_UP));
                             total = total.add(qty);
                             // Line-level pendingQty was declared on SalesOrderItem but never
                             // actually populated anywhere — every consumer (Sales DC's SO-select
@@ -683,6 +684,12 @@ public class SalesService {
                             // instead of what's actually left to dispatch. A brand-new line has
                             // nothing dispatched yet, so pending = ordered.
                             item.setPendingQty(qty);
+                            // Default the line-level progress columns so a freshly saved SO
+                            // doesn't re-open with blank dispatch/invoice/status values.
+                            if (item.getLineStatus() == null || item.getLineStatus().isBlank())
+                                item.setLineStatus("Open");
+                            if (item.getDispatchedQty() == null) item.setDispatchedQty(BigDecimal.ZERO);
+                            if (item.getInvoicedQty() == null) item.setInvoicedQty(BigDecimal.ZERO);
                         }
                         so.setOrderedQty(total);
                         so.setPendingQty(total);
@@ -1139,6 +1146,7 @@ public class SalesService {
                 BigDecimal lineOrdered = item.getOrderQty() == null ? BigDecimal.ZERO : item.getOrderQty();
                 BigDecimal lineDispatched = dispatchedByItem.getOrDefault(item.getItemCode(), BigDecimal.ZERO);
                 item.setPendingQty(lineOrdered.subtract(lineDispatched));
+                item.setDispatchedQty(lineDispatched);
             }
 
             if (newDispatched.compareTo(BigDecimal.ZERO) > 0 && newDispatched.compareTo(ordered) < 0) {
@@ -1175,6 +1183,15 @@ public class SalesService {
             }
 
             so.setInvoicedQty(currentInvoiced.add(invTotal));
+
+            // Keep each line's own invoicedQty in step too — the Sales DC / Invoice
+            // screens auto-fill from the SO's stored line quantities, so stale line
+            // values made a re-opened order show blank dispatch/invoice progress.
+            Map<String, BigDecimal> invoicedByItem = invoicedQtyByItem(so.getDocNo());
+            for (SalesOrderItem item : (List<SalesOrderItem>) so.getLines()) {
+                item.setInvoicedQty(invoicedByItem.getOrDefault(item.getItemCode(), BigDecimal.ZERO));
+            }
+
             so.setUpdatedAt(Instant.now());
             so.setUpdatedBy(user);
         } catch (IllegalStateException e) {

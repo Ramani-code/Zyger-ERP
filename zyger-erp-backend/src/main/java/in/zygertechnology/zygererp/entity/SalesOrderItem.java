@@ -36,6 +36,21 @@ public class SalesOrderItem extends BaseLine implements LineEntity {
     /** FRS §4.9: pending qty = quantity − Σ(committed to Work Orders) */
     @Column(name="pending_qty") BigDecimal pendingQty;
 
+    /** Linked Job / Production ID captured on the Sales Order line (frontend
+     * SalesOrderForm line grid) — previously the form-only key had no entity column,
+     * so the value was silently dropped on save and came back blank on view. */
+    @Column(name="linked_job_id", length=60) String linkedJobId;
+
+    /** Line-level workflow status entered on the form grid (Open / Partially
+     * Dispatched / Closed). */
+    @Column(name="line_status", length=30) String lineStatus;
+
+    /** Line-level dispatch/invoice progress mirrors — persisted so the Sales Order
+     * line grid shows real values when a saved order is re-opened. Kept in step by
+     * SalesService.updateSoFromDispatch / updateSoFromInvoice. */
+    @Column(name="dispatched_qty") BigDecimal dispatchedQty;
+    @Column(name="invoiced_qty") BigDecimal invoicedQty;
+
     @Override public BigDecimal getQty() { return orderQty == null ? BigDecimal.ZERO : orderQty; }
     @Override public BigDecimal getRate() { return unitPrice; }
 }

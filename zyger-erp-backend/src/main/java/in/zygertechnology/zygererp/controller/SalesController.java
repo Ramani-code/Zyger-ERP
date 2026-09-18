@@ -172,6 +172,7 @@ public class SalesController {
         String docNo = String.valueOf(row.getOrDefault("docNo", type)).replaceAll("[^A-Za-z0-9_-]", "_");
         String disposition = download ? "attachment" : "inline";
         byte[] pdf = "sales-invoice".equals(type) ? printer.salesInvoice(row)
+                : "proforma-invoice".equals(type) ? printer.proformaInvoice(row)
                 : "sales-dc".equals(type) ? printer.deliveryChallan(row, type)
                 : printer.salesDoc(row, type);
         return ResponseEntity.ok()

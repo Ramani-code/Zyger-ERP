@@ -281,6 +281,7 @@ public class DocumentFacade {
             }
         }
         denormalizeLines(r, findKeyForEntity(e));
+        denormalizeReturnHeader(r, findKeyForEntity(e));
 
         // Enrich with workflow allowed transitions
         if (e.getStatus() != null) {
@@ -515,9 +516,18 @@ public class DocumentFacade {
 
     // DC Module FRS v1.0 §6/§7: a Delivery Challan is saved straight to Confirmed and posts its
     // stock movement on the same "Save & Post Stock" action, without a separate Submit/Approve
-    // step. So the three DC types are exempt from the generic APPROVED-before-post guard.
+    // step. So these DC types are exempt from the generic APPROVED-before-post guard. Sales DC
+    // joined this set so it also reduces stock immediately on save, matching how DC
+    // Return/Invoice Return already restore it immediately (see DIRECT_POST_RETURN_KEYS).
     private static final Set<String> DIRECT_POST_DC_KEYS = Set.of(
-            "jo-dc", "general-dc", "transfer-dc");
+            "jo-dc", "general-dc", "transfer-dc", "sales-dc");
+
+    // A DC Return or Invoice Return is entered against stock that was already issued out via a
+    // real DC/Invoice — the outward movement was already approved once, so re-approving the
+    // return on top of it is pure friction, not a control. Direct "Save & Post" straight from
+    // DRAFT, same exemption shape as DIRECT_POST_DC_KEYS above.
+    private static final Set<String> DIRECT_POST_RETURN_KEYS = Set.of(
+            "dc-return", "invoice-return");
 
     private static final Set<String> REQUIRED_LINES_KEYS = Set.of(
             // Inventory (Effect IN/OUT/ADJUST)
@@ -676,10 +686,80 @@ public class DocumentFacade {
         }
     }
 
+    /**
+     * Return Management shared form (ReturnManagementForm.tsx) submits one generic
+     * contract for all three returns — party / originalDocumentNo / originalDcDate /
+     * soNumber / reasonCode on the header and returnedQty on the lines. Those names do
+     * NOT match the historical entity columns: DcReturn and InvoiceReturn persist the
+     * party as `customer`, the original reference as `originalDcNumber` /
+     * `originalInvoiceNumber`, the date as `originalDcDate` / `originalInvoiceDate`,
+     * the order ref as `salesOrderNumber`, and the reason as `returnReason` — while
+     * the DC/Invoice return lines post stock from `currentReturnQty`, which the form
+     * only ever sends as `returnedQty`. Without bridging, every such field was silently
+     * dropped on DRAFT save AND came back blank on re-open. StockReturn already matches,
+     * so it is left untouched.
+     */
+    private void normalizeReturnAliases(String key, Map<String, Object> body) {
+        switch (key) {
+            case "dc-return" -> {
+                if (body.containsKey("party")) body.putIfAbsent("customer", body.get("party"));
+                if (body.containsKey("originalDocumentNo")) body.putIfAbsent("originalDcNumber", body.get("originalDocumentNo"));
+                if (body.containsKey("soNumber")) body.putIfAbsent("salesOrderNumber", body.get("soNumber"));
+                if (body.containsKey("reasonCode")) body.putIfAbsent("returnReason", body.get("reasonCode"));
+            }
+            case "invoice-return" -> {
+                if (body.containsKey("party")) body.putIfAbsent("customer", body.get("party"));
+                if (body.containsKey("originalDocumentNo")) body.putIfAbsent("originalInvoiceNumber", body.get("originalDocumentNo"));
+                if (body.containsKey("originalDcDate")) body.putIfAbsent("originalInvoiceDate", body.get("originalDcDate"));
+                if (body.containsKey("soNumber")) body.putIfAbsent("salesOrderNumber", body.get("soNumber"));
+                if (body.containsKey("reasonCode")) body.putIfAbsent("returnReason", body.get("reasonCode"));
+            }
+            default -> { }
+        }
+        if ("dc-return".equals(key) || "invoice-return".equals(key)) {
+            Object linesObj = body.get("lines");
+            if (linesObj instanceof List<?> lineList) {
+                for (Object lineObj : lineList) {
+                    if (lineObj instanceof Map<?, ?> lineMap) {
+                        Map<String, Object> line = (Map<String, Object>) lineMap;
+                        // DcReturnLine/InvoiceReturnLine generate their movement qty from
+                        // currentReturnQty (their getQty() override); the shared form only
+                        // sends returnedQty, so mirror it before persistence.
+                        if ((line.get("currentReturnQty") == null) && line.get("returnedQty") != null) {
+                            line.put("currentReturnQty", line.get("returnedQty"));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /** Read-side counterpart of {@link #normalizeReturnAliases}: re-expose the entity's
+     * canonical columns under the shared-form field names (originalDocumentNo,
+     * reasonCode, soNumber, originalDcDate) so the generic form and the
+     * ReturnManagementList/Reports screens re-open saved DC/Invoice returns correctly. */
+    private void denormalizeReturnHeader(Map<String, Object> row, String key) {
+        switch (key) {
+            case "dc-return" -> {
+                row.putIfAbsent("originalDocumentNo", row.get("originalDcNumber"));
+                row.putIfAbsent("reasonCode", row.get("returnReason"));
+                row.putIfAbsent("soNumber", row.get("salesOrderNumber"));
+            }
+            case "invoice-return" -> {
+                row.putIfAbsent("originalDocumentNo", row.get("originalInvoiceNumber"));
+                row.putIfAbsent("originalDcDate", row.get("originalInvoiceDate"));
+                row.putIfAbsent("reasonCode", row.get("returnReason"));
+                row.putIfAbsent("soNumber", row.get("salesOrderNumber"));
+            }
+            default -> { }
+        }
+    }
+
     @Transactional
     @Idempotent
     public DocEntity create(String key, Map<String, Object> body, String user) {
         normalizeLines(body, key);
+        normalizeReturnAliases(key, body);
         DocEntity e = mapper.convertValue(body, cls(key));
         if (e.getLines() != null) {
             for (LineEntity l : e.getLines()) {
@@ -689,7 +769,15 @@ public class DocumentFacade {
                 }
             }
         }
-        e.setStatus("DRAFT");
+        // Sales Order / Proforma Invoice have no submit/approve workflow — Save is the
+        // only action, so a new document is immediately CONFIRMED/CREATED rather than
+        // sitting in DRAFT.
+        String initialStatus = switch (key) {
+            case "sales-order" -> "CONFIRMED";
+            case "proforma-invoice" -> "CREATED";
+            default -> "DRAFT";
+        };
+        e.setStatus(initialStatus);
         e.setDocDate(parse(body.get("date")));
         e.setCreatedBy(user);
         e.setCreatedAt(Instant.now());
@@ -769,16 +857,24 @@ public class DocumentFacade {
         }
     }
 
+    // Customer returns (DC Return / Invoice Return) posted with disposition
+    // PENDING_INSPECTION land their qty in QC_HOLD just like a QC-required inward does —
+    // they belong in the same Inspection Pending queue as a deferred-creation item, not
+    // just inward receipts. Unlike inward, there's no opt-in "qcRequired" flag: any such
+    // POSTED return is awaiting inspection by definition.
+    private static final Set<String> QC_RETURN_KEYS = Set.of("dc-return", "invoice-return");
+
     @Transactional(readOnly = true)
     public List<Map<String, Object>> awaitingQcDocRows(String key) {
         List<Map<String, Object>> rows = new ArrayList<>();
-        if (!QC_INWARD_KEYS.contains(key)) return rows;
+        boolean isInward = QC_INWARD_KEYS.contains(key);
+        boolean isReturn = QC_RETURN_KEYS.contains(key);
+        if (!isInward && !isReturn) return rows;
         for (DocEntity d : findAll(key)) {
-            if (d.getId() == null
-                    || !qcRequired(d)
-                    || !"POSTED".equals(d.getStatus())) {
-                continue;
-            }
+            if (d.getId() == null || !"POSTED".equals(d.getStatus())) continue;
+            if (isInward && !qcRequired(d)) continue;
+            if (isReturn && !"PENDING_INSPECTION".equalsIgnoreCase(headerStr(d, "disposition"))) continue;
+
             Long cnt = em.createQuery(
                     "SELECT count(q) FROM QualityInspection q WHERE q.sourceType = :st AND q.sourceId = :sid", Long.class)
                     .setParameter("st", key)
@@ -806,7 +902,9 @@ public class DocumentFacade {
                 if (l0.getItemDesc() != null && !l0.getItemDesc().isBlank()) {
                     row.put("itemDescription", l0.getItemDesc());
                 }
-                row.put("receivedQuantity", inwardAcceptedQtySum(lines, key));
+                row.put("receivedQuantity", isReturn
+                        ? lines.stream().map(LineEntity::getQty).filter(java.util.Objects::nonNull).reduce(BigDecimal.ZERO, BigDecimal::add)
+                        : inwardAcceptedQtySum(lines, key));
             }
             row.put("inspectionStatus", "AWAITING_QC");
             row.put("decisionStatus", "PENDING");
@@ -838,11 +936,16 @@ public class DocumentFacade {
      */
     @Transactional
     public List<Long> createInspectionsFromInward(String key, Long id, String user) {
-        if (!QC_INWARD_KEYS.contains(key)) {
-            throw new IllegalArgumentException("Not an inward source: " + key);
+        boolean isReturn = QC_RETURN_KEYS.contains(key);
+        if (!QC_INWARD_KEYS.contains(key) && !isReturn) {
+            throw new IllegalArgumentException("Not a QC-eligible source: " + key);
         }
         DocEntity e = get(key, id);
-        if (!qcRequired(e)) {
+        if (isReturn) {
+            if (!"PENDING_INSPECTION".equalsIgnoreCase(headerStr(e, "disposition"))) {
+                throw new IllegalStateException("Document " + e.getDocNo() + " does not require Quality Inspection");
+            }
+        } else if (!qcRequired(e)) {
             throw new IllegalStateException("Document " + e.getDocNo() + " does not require Quality Inspection");
         }
 
@@ -975,7 +1078,13 @@ public class DocumentFacade {
         // field (inspectionStatus) and never populate this generic one, leaving it permanently
         // null — List.of(...).contains(null) would NPE, so a null status is treated as editable
         // rather than blocked, since the generic engine never marked it as an immutable state.
-        if (!Set.of("purchase-request", "supplier-enquiry", "supplier-quotation", "purchase-order").contains(key)
+        // Sales Order / Proforma Invoice have no submit/approve workflow, so they're
+        // editable at any status except CANCELLED (there's no transition back to DRAFT
+        // to unlock them otherwise).
+        if (Set.of("sales-order", "proforma-invoice").contains(key)) {
+            if ("CANCELLED".equals(old.getStatus()))
+                throw new IllegalStateException("Cancelled documents can no longer be edited");
+        } else if (!Set.of("purchase-request", "supplier-enquiry", "supplier-quotation", "purchase-order").contains(key)
                 && old.getStatus() != null && !List.of("DRAFT", "REJECTED").contains(old.getStatus()))
             throw new IllegalStateException("Only DRAFT/REJECTED documents can be edited");
 
@@ -991,6 +1100,7 @@ public class DocumentFacade {
         DocTypes.DocDef def = DocTypes.get(key);
 
         normalizeLines(body, key);
+        normalizeReturnAliases(key, body);
         DocEntity incoming = mapper.convertValue(body, cls(key));
         Integer poNextRevision = null;
         if ("purchase-order".equals(key) && !List.of("DRAFT", "REJECTED").contains(old.getStatus())) {
@@ -1254,7 +1364,8 @@ public class DocumentFacade {
                         // SCR-103: no separate approval step — a receipt posts straight
                         // from ALLOCATED, not from APPROVED like the generic doc types.
                         requireStatus(e, "ALLOCATED");
-                    } else if (!DIRECT_POST_INWARD_KEYS.contains(key) && !DIRECT_POST_DC_KEYS.contains(key)) {
+                    } else if (!DIRECT_POST_INWARD_KEYS.contains(key) && !DIRECT_POST_DC_KEYS.contains(key)
+                            && !DIRECT_POST_RETURN_KEYS.contains(key)) {
                         requireStatus(e, "APPROVED");
                     }
                     if ("sales-dc".equals(key)) enforceFinalInspectionGate(e, options);
@@ -1386,7 +1497,7 @@ public class DocumentFacade {
         DocTypes.DocDef def = DocTypes.get(key);
         // DC Module FRS v1.0 §7: availability is re-validated at posting time, not only on entry,
         // so a draft posted later cannot exceed the stock on hand at the movement location.
-        if (Set.of("jo-dc", "general-dc", "transfer-dc").contains(key)) {
+        if (Set.of("jo-dc", "general-dc", "transfer-dc", "sales-dc").contains(key)) {
             validateDcStockAvailability(key, e);
         }
         List<LedgerLine> lines = collectLines(def, e);
@@ -1453,8 +1564,10 @@ public class DocumentFacade {
                 }
             } else switch (def.effect()) {
                 case IN -> stockService.recordStockIn(
-                        e.getDocNo(), key, txType, l.item(), l.loc(), l.batch(), l.heat(),
-                        BigDecimal.valueOf(l.qty()), e.getDocDate(), e.getCreatedBy(), stockStatus);
+                        e.getDocNo(), key, l.txSuffix() != null ? txType + l.txSuffix() : txType,
+                        l.item(), l.loc(), l.batch(), l.heat(),
+                        BigDecimal.valueOf(l.qty()), e.getDocDate(), e.getCreatedBy(),
+                        l.status() != null ? l.status() : stockStatus);
                 case OUT -> stockService.recordStockOut(
                         e.getDocNo(), key, txType, l.item(), l.loc(), l.batch(), l.heat(),
                         BigDecimal.valueOf(l.qty()), e.getDocDate(), e.getCreatedBy(),
@@ -1496,9 +1609,15 @@ public class DocumentFacade {
                 ? joDc.getJobOrderNo() : joDc.getLinkedDocumentNo();
         if (joNo == null || joNo.isBlank()) return;
 
-        JobOrder jo = em.createQuery("select j from JobOrder j where j.docNo = :no", JobOrder.class)
-                .setParameter("no", joNo)
-                .getResultStream().findFirst().orElse(null);
+        JobOrder jo = null;
+        try {
+            List<JobOrder> found = em.createQuery("select j from JobOrder j where j.docNo = :no", JobOrder.class)
+                    .setParameter("no", joNo)
+                    .setMaxResults(1)
+                    .getResultList();
+            if (!found.isEmpty()) jo = found.get(0);
+        } catch (Exception ignored) {
+        }
         if (jo == null || jo.getLines() == null || jo.getLines().isEmpty()) return;
         if ("CANCELLED".equalsIgnoreCase(jo.getStatus())) return;
 
@@ -1830,7 +1949,20 @@ public class DocumentFacade {
         return "FREE";
     }
 
-    private record LedgerLine(String item, String loc, String batch, String heat, double qty) {}
+    /**
+     * status: the stock-status bucket this line's qty should post to, or null to fall
+     * back to the doc-level status computed by determineStockStatus(). Only Stock
+     * Return sets it explicitly, since a single return document can split one line's
+     * qty across the FREE bucket (Accepted Qty) and a REJECTED/DAMAGED/SCRAP bucket
+     * (Rejected Qty) — see collectLines().
+     *
+     * txSuffix: appended to the doc-level txType for this specific ledger entry, or
+     * null to use it unchanged. recordStockIn/Out dedupe on (docNo, docType, txType)
+     * alone, with no per-line disambiguation, so the two ledger rows a split Stock
+     * Return line produces (FREE + a reject bucket) need distinct txTypes or the
+     * second one is silently dropped as a "duplicate" of the first.
+     */
+    private record LedgerLine(String item, String loc, String batch, String heat, double qty, String status, String txSuffix) {}
 
     private double currentOnHand(String item, String loc, String batch) {
         return stockService.onHand(item, loc, batch);
@@ -1849,8 +1981,30 @@ public class DocumentFacade {
                     try { allotmentDoc = getByNumber("stock-allotment", allotmentNo); } catch (Exception ignored) {}
                 }
             }
+            // A DC Return / Invoice Return carries no source-location field of its own —
+            // goods must go back into whatever real store the original DC/Invoice actually
+            // shipped from, not the "MAIN" fallback (which isn't a registered store and
+            // fails to post at all).
+            String originalDocLoc = null;
+            if ("dc-return".equals(def.key()) && e instanceof DcReturn dr && dr.getOriginalDcNumber() != null && !dr.getOriginalDcNumber().isBlank()) {
+                try {
+                    DocEntity origDc = getByNumber(originalDocTypeForDcReturn(dr), dr.getOriginalDcNumber());
+                    originalDocLoc = headerStr(origDc, "sourceLocation");
+                } catch (Exception ignored) {}
+            } else if ("invoice-return".equals(def.key()) && e instanceof InvoiceReturn ir && ir.getOriginalInvoiceNumber() != null && !ir.getOriginalInvoiceNumber().isBlank()) {
+                try {
+                    DocEntity origInvoice = getByNumber("sales-invoice", ir.getOriginalInvoiceNumber());
+                    String dcNo = headerStr(origInvoice, "salesDcNumber");
+                    if (dcNo != null && !dcNo.isBlank()) {
+                        DocEntity origDc = getByNumber("sales-dc", dcNo);
+                        originalDocLoc = headerStr(origDc, "sourceLocation");
+                    }
+                } catch (Exception ignored) {}
+            }
+
             for (LineEntity l : e.getLines()) {
-                String loc = firstNonEmpty(l.getLocation(), headerStr(e, "sourceLocation"), headerStr(e, "storeLocation"));
+                String loc = firstNonEmpty(l.getLocation(), headerStr(e, "sourceLocation"), headerStr(e, "storeLocation"),
+                        originalDocLoc == null ? "" : originalDocLoc);
                 if (loc.isEmpty() && allotmentDoc != null) {
                     for (LineEntity aLine : allotmentDoc.getLines()) {
                         if (l.getItemCode() != null && l.getItemCode().equals(aLine.getItemCode())
@@ -1864,6 +2018,40 @@ public class DocumentFacade {
                 if (l instanceof BaseLine bl && (bl.getLocation() == null || bl.getLocation().isBlank())) {
                     bl.setLocation(loc);
                 }
+                if ("stock-return".equals(def.key()) && l instanceof StockReturnLine srl) {
+                    // Return Management FRS v1.0 §2 B#3: Accepted Qty is reusable stock and
+                    // always lands FREE; Rejected Qty lands in whatever bucket the line (or,
+                    // failing that, the header Condition) says it's in. A return entered
+                    // without an Accepted/Rejected split at all (both blank/zero) falls back
+                    // to posting the whole Returned Qty under the header-level status, exactly
+                    // as before this split existed.
+                    BigDecimal accepted = srl.getAcceptedQty();
+                    BigDecimal rejected = srl.getRejectedQty();
+                    boolean hasSplit = (accepted != null && accepted.signum() > 0)
+                            || (rejected != null && rejected.signum() > 0);
+                    if (!hasSplit) {
+                        BigDecimal returned = srl.getReturnedQty();
+                        if (returned != null && returned.signum() > 0) {
+                            out.add(new LedgerLine(l.getItemCode(), loc, l.getBatchNo(), l.getHeatNo(),
+                                    returned.doubleValue(), null, null));
+                        }
+                        continue;
+                    }
+                    if (accepted != null && accepted.signum() > 0) {
+                        out.add(new LedgerLine(l.getItemCode(), loc, l.getBatchNo(), l.getHeatNo(),
+                                accepted.doubleValue(), "FREE", "_ACCEPTED_" + srl.getLineNo()));
+                    }
+                    if (rejected != null && rejected.signum() > 0) {
+                        String lineStatus = srl.getStockStatus();
+                        String headerStatus = returnStockStatus(headerStr(e, "condition"));
+                        String bucket = (lineStatus != null && Set.of("REJECTED", "DAMAGED", "SCRAP").contains(lineStatus.toUpperCase()))
+                                ? lineStatus.toUpperCase()
+                                : (!"FREE".equals(headerStatus) ? headerStatus : "REJECTED");
+                        out.add(new LedgerLine(l.getItemCode(), loc, l.getBatchNo(), l.getHeatNo(),
+                                rejected.doubleValue(), bucket, "_REJECTED_" + srl.getLineNo()));
+                    }
+                    continue;
+                }
                 if (DIRECT_POST_INWARD_KEYS.contains(def.key())) {
                     // Only the Accepted Qty ever reaches stock for an Inward line — the
                     // Received Qty is just what physically arrived. validateInwardAcceptedQty()
@@ -1871,16 +2059,16 @@ public class DocumentFacade {
                     // fully rejected at receipt (acceptedQty 0) posts no stock movement at all.
                     BigDecimal accepted = l.getAcceptedQty();
                     if (accepted == null || accepted.signum() <= 0) continue;
-                    out.add(new LedgerLine(l.getItemCode(), loc, l.getBatchNo(), l.getHeatNo(), accepted.doubleValue()));
+                    out.add(new LedgerLine(l.getItemCode(), loc, l.getBatchNo(), l.getHeatNo(), accepted.doubleValue(), null, null));
                 } else {
-                    out.add(new LedgerLine(l.getItemCode(), loc, l.getBatchNo(), l.getHeatNo(), l.getQty().doubleValue()));
+                    out.add(new LedgerLine(l.getItemCode(), loc, l.getBatchNo(), l.getHeatNo(), l.getQty().doubleValue(), null, null));
                 }
             }
             return out;
         }
         if (def.effect() == DocTypes.Effect.ADJUST) {
             out.add(new LedgerLine(headerStr(e, "itemCode"), headerStr(e, "location"),
-                    headerStr(e, "batchNo"), "", numOrZero(headerVal(e, "correctedQty"))));
+                    headerStr(e, "batchNo"), "", numOrZero(headerVal(e, "correctedQty")), null, null));
         }
         return out;
     }
@@ -2160,10 +2348,6 @@ public class DocumentFacade {
             if (itemCode == null || itemCode.isBlank()) continue;
             var item = itemCache.findByCode(itemCode).orElse(null);
             if (item == null) continue;
-            if (Boolean.TRUE.equals(item.getRequiresBatch()) && (line.getBatchNo() == null || line.getBatchNo().isBlank())) {
-                throw new BusinessRuleException("BATCH_NUMBER_REQUIRED",
-                        "Item " + itemCode + " requires a batch number.", Map.of("itemCode", itemCode));
-            }
             if (Boolean.TRUE.equals(item.getRequiresHeat()) && (line.getHeatNo() == null || line.getHeatNo().isBlank())) {
                 throw new BusinessRuleException("HEAT_NUMBER_REQUIRED",
                         "Item " + itemCode + " requires a heat number.", Map.of("itemCode", itemCode));
@@ -2172,10 +2356,22 @@ public class DocumentFacade {
     }
 
     private void validateAmendmentReason(String key, DocEntity e) {
-        if (Set.of("stock-amendment", "physical-stock-amendment").contains(key)) {
+        if ("stock-amendment".equals(key)) {
             String reasonCode = headerStr(e, "reasonCode");
             if (reasonCode == null || reasonCode.isBlank()) {
                 throw new IllegalStateException("Amendment reason code is required (INV-ADJ-01)");
+            }
+        }
+        // Physical Stock Amendment captures reasonCode per line (each item's variance can have
+        // its own reason), not on the header — PhysicalStockAmendment has no header reasonCode
+        // field, so checking headerStr() here always failed regardless of user input.
+        if ("physical-stock-amendment".equals(key) && e.getLines() != null) {
+            for (LineEntity line : e.getLines()) {
+                if (line instanceof PhysicalStockAmendmentLine psal) {
+                    if (psal.getReasonCode() == null || psal.getReasonCode().isBlank()) {
+                        throw new IllegalStateException("Amendment reason code is required (INV-ADJ-01)");
+                    }
+                }
             }
         }
         // Stock Allotment & Adjustment FRS v1.0 §6 D: a Physical Stock Amendment must
@@ -2373,11 +2569,7 @@ public class DocumentFacade {
     }
 
     private void validateDcStockAvailability(String key, DocEntity e) {
-        if (!Set.of("jo-dc", "general-dc", "transfer-dc").contains(key)) return;
-
-        if (e.getDocDate() != null && e.getDocDate().isAfter(LocalDate.now())) {
-            throw new IllegalArgumentException("DC Date cannot be a future date");
-        }
+        if (!Set.of("jo-dc", "general-dc", "transfer-dc", "sales-dc").contains(key)) return;
 
         String sourceLoc = headerStr(e, "sourceLocation");
         if (sourceLoc == null || sourceLoc.isBlank()) {
@@ -2398,13 +2590,19 @@ public class DocumentFacade {
                 throw new IllegalArgumentException("Line quantity for item " + itemCode + " must be greater than zero");
             }
 
-            String checkLoc = isJoReceiving ? "Goods with Job Worker" : sourceLoc;
-            String batchNo = line.getBatchNo() != null ? line.getBatchNo() : "";
+            String checkLoc = isJoReceiving ? "Goods with Job Worker" : firstNonEmpty(line.getLocation(), sourceLoc);
+
+            if (itemCache.findByCode(itemCode).isEmpty()) {
+                throw new IllegalStateException("Item " + itemCode + " is not available (not found in Item Master)");
+            }
 
             double available = stockService.available(itemCode, checkLoc);
+            if (available <= 0) {
+                throw new IllegalStateException("Item " + itemCode + " is not available in stock at " + checkLoc);
+            }
             if (available < qty.doubleValue()) {
                 throw new IllegalStateException("Quantity " + qty + " for item " + itemCode +
-                        " exceeds available stock (" + available + ") at " + checkLoc);
+                        " is low — only " + available + " available at " + checkLoc);
             }
         }
     }
@@ -2669,6 +2867,27 @@ public class DocumentFacade {
         if (e.getLines() == null) return;
         LocalDate now = LocalDate.now();
         String sourceLoc = headerStr(e, "sourceLocation");
+
+        if ("stock-return".equals(key)) {
+            // A Stock Return line can have been posted split across two stock-status
+            // buckets (FREE for Accepted Qty, a reject bucket for Rejected Qty — see
+            // collectLines()). recordStockOut always targets FREE only, so it can't
+            // undo the reject-bucket half; reverseInwardStock searches every bucket at
+            // the line's location for the full Returned Qty and claws it back from
+            // wherever it actually landed.
+            String txType = "STOCK_RETURN_CANCEL";
+            for (LineEntity line : e.getLines()) {
+                BigDecimal qty = line.getQty();
+                if (qty == null || qty.signum() <= 0) continue;
+                String loc = line.getLocation() != null && !line.getLocation().isBlank()
+                        ? line.getLocation() : (!sourceLoc.isBlank() ? sourceLoc : "MAIN");
+                stockService.reverseInwardStock(e.getDocNo(), key, txType,
+                        line.getItemCode(), loc, line.getBatchNo(), line.getHeatNo(),
+                        qty, now, user);
+            }
+            return;
+        }
+
         for (LineEntity line : e.getLines()) {
             String stockStatus = "FREE";
             try {
@@ -2676,8 +2895,6 @@ public class DocumentFacade {
                     stockStatus = returnStockStatus(dr.getDisposition());
                 } else if (e instanceof InvoiceReturn ir && ir.getDisposition() != null) {
                     stockStatus = returnStockStatus(ir.getDisposition());
-                } else if (e instanceof StockReturn sr) {
-                    stockStatus = returnStockStatus(headerStr(e, "condition"));
                 }
             } catch (Exception ignored) {}
 
