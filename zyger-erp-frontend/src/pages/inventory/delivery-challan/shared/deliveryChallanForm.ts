@@ -307,10 +307,6 @@ export function validateDeliveryChallanForm(
     errors.push('DC Date is required.');
   }
 
-  if (new Date(form.date) > new Date()) {
-    errors.push('DC Date cannot be a future date.');
-  }
-
   if (!form.party.trim()) {
     errors.push(`${config.partyLabel} is required.`);
   }

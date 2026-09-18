@@ -2526,6 +2526,97 @@ textarea.in {
     z-index: 2
 }
 
+/* Segmented-tab look for the nav row: quiet at rest, filled only when active,
+   so ten items read as one coherent control instead of ten loose buttons. */
+.ir-rail .btn {
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    border-radius: 999px;
+    font-weight: 600;
+    transition: background .12s ease, color .12s ease
+}
+
+.ir-rail .btn:hover {
+    background: var(--surface);
+    color: var(--text)
+}
+
+.ir-rail .btn.on {
+    box-shadow: var(--sh-sm, 0 1px 3px rgba(0, 0, 0, .12))
+}
+
+/* KPI tiles — bold figure first, quiet label above, icon as a small tinted
+   chip rather than a full-color block; a soft lift on hover is the only
+   affordance needed to read as clickable. */
+.ir-kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+    margin-bottom: 20px
+}
+
+.ir-kpi-tile {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    text-align: left;
+    background: var(--card, #fff);
+    border: 1px solid var(--border, #e2e8f0);
+    border-radius: 12px;
+    padding: 14px 16px;
+    cursor: pointer;
+    font-family: inherit;
+    transition: box-shadow .15s ease, transform .15s ease
+}
+
+.ir-kpi-tile:hover {
+    box-shadow: var(--sh-sm, 0 1px 3px rgba(0, 0, 0, .1));
+    transform: translateY(-1px)
+}
+
+.ir-kpi-tile:focus-visible {
+    outline: 2px solid var(--blue);
+    outline-offset: 2px
+}
+
+.ir-kpi-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px
+}
+
+.ir-kpi-label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    color: var(--muted)
+}
+
+.ir-kpi-ic {
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0
+}
+
+.ir-kpi-ic .material-symbols-rounded {
+    font-size: 16px
+}
+
+.ir-kpi-value {
+    font-size: 24px;
+    font-weight: 800;
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.1
+}
+
 /* BOM MASTER SCREEN CUSTOM STYLES */
 .bom-container {
     padding: 24px;

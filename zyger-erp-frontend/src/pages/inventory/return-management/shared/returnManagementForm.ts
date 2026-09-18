@@ -123,16 +123,16 @@ export function formFromDto(
 
   return {
     date: dto.date ?? '',
-    party: dto.party ?? '',
-    originalDocumentNo: dto.originalDocumentNo ?? '',
-    originalDcDate: dto.originalDcDate || (dto as any).originalDcDate || (dto as any).dcDate || '',
+    party: dto.party ?? (dto as any).customer ?? '',
+    originalDocumentNo: dto.originalDocumentNo ?? (dto as any).originalDcNumber ?? (dto as any).originalInvoiceNumber ?? '',
+    originalDcDate: dto.originalDcDate || (dto as any).originalDcDate || (dto as any).originalInvoiceDate || (dto as any).dcDate || '',
     soNumber: dto.soNumber || (dto as any).salesOrderNumber || '',
     customerPoNumber: dto.customerPoNumber || (dto as any).customerPo || '',
     originalIssueType: dto.originalIssueType ?? '',
     jobOrderNo: dto.jobOrderNo ?? '',
     condition: dto.condition ?? 'FREE',
     reduceConsumption: dto.reduceConsumption !== false,
-    reasonCode: dto.reasonCode ?? '',
+    reasonCode: dto.reasonCode || (dto as any).returnReason || (dto as any).reason || '',
     inspectionRequired: dto.inspectionRequired ?? '',
     remarks: dto.remarks ?? '',
     lines:

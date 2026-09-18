@@ -1004,6 +1004,13 @@ export default function PurchaseDocScreen({ config, initialDocId, viewOnly = fal
         const receivedQty = Number(l.receivedQty ?? l.qty ?? 0);
         const acceptedQty = Number(l.acceptedQty ?? receivedQty);
         const rate = Number(l.rate ?? 0);
+        // Carry the source line's tax rate and store location forward so the return defaults
+        // to the same tax the goods were originally bought under, and posts stock-out against
+        // the store they actually sit in — the user can still edit either before saving.
+        const taxPct = Number(l.tax ?? 0);
+        const discPct = Number(l.discount ?? 0);
+        const taxableAmount = acceptedQty * rate * (1 - discPct / 100);
+        const taxAmt = (taxableAmount * taxPct) / 100;
         return {
           lineNo: i + 1,
           itemCode: l.itemCode || '',
@@ -1012,8 +1019,15 @@ export default function PurchaseDocScreen({ config, initialDocId, viewOnly = fal
           returnQty: acceptedQty,
           qty: acceptedQty,
           rate,
-          netAmount: acceptedQty * rate,
+          tax: taxPct,
+          taxAmount: taxAmt,
+          netAmount: taxableAmount + taxAmt,
           originalReceivedQty: acceptedQty,
+          location: l.location || '',
+          warehouse: l.warehouse || '',
+          batchNo: l.batchNo || '',
+          heatNo: l.heatNo || '',
+          lotNo: l.lotNo || '',
           reasonCode: '',
         };
       }));
@@ -1073,13 +1087,24 @@ export default function PurchaseDocScreen({ config, initialDocId, viewOnly = fal
       }
 
       // Recalculate row amounts
+      // Purchase Return's qty field is 'returnQty' (not 'orderQty'/'requiredQty'/'qty' like
+      // every other purchase doc using this screen), so it needs its own branch here — without
+      // it, rawQty falls through to the always-blank orderQty/requiredQty/qty fields and the
+      // row's amount/tax silently compute as zero regardless of what was typed into Return Qty.
       const rawQty = fieldKey === 'orderQty'
         ? row.orderQty
-        : (fieldKey === 'requiredQty' ? row.requiredQty : (fieldKey === 'qty' ? row.qty : (row.orderQty ?? row.requiredQty ?? row.qty)));
+        : fieldKey === 'requiredQty'
+          ? row.requiredQty
+          : fieldKey === 'qty'
+            ? row.qty
+            : fieldKey === 'returnQty'
+              ? row.returnQty
+              : (row.orderQty ?? row.requiredQty ?? row.qty ?? row.returnQty);
       const qty = Number(rawQty ?? 0);
       row.orderQty = qty;
       row.requiredQty = qty;
       row.qty = qty;
+      if (docType === 'purchase-return') row.returnQty = qty;
 
       const price = Number(row.unitPrice ?? row.rate ?? 0);
       row.unitPrice = price;
@@ -1193,10 +1218,6 @@ export default function PurchaseDocScreen({ config, initialDocId, viewOnly = fal
       } else {
         savedRes = await createMutation.mutateAsync(payload);
         toast(`${config.title} saved successfully!`, 'success');
-        if (savedRes && (savedRes.id || savedRes.docNo)) {
-          setDocumentId(String(savedRes.id || savedRes.docNo));
-          setForm(prev => ({ ...prev, ...savedRes }));
-        }
       }
 
       logSystemActivity({
@@ -1207,6 +1228,9 @@ export default function PurchaseDocScreen({ config, initialDocId, viewOnly = fal
         user: user?.username || 'Unknown',
         status: savedRes?.status || (docType === 'purchase-order' ? 'DRAFT' : 'RELEASED'),
       });
+      // Land back on a fresh blank entry form rather than staying on the just-saved
+      // document — the same behavior every success path in this screen now follows.
+      openForm(null, false);
     } catch (err: any) {
       toast(getApiErrorMessage(err, 'Failed to save purchase document'), 'error');
     }
@@ -1234,7 +1258,7 @@ export default function PurchaseDocScreen({ config, initialDocId, viewOnly = fal
         user: user?.username || 'Unknown',
         status: 'SUBMITTED',
       });
-      backToList();
+      openForm(null, false);
     } catch (err: any) {
       toast(getApiErrorMessage(err, 'Failed to submit purchase document'), 'error');
     }
@@ -1246,7 +1270,7 @@ export default function PurchaseDocScreen({ config, initialDocId, viewOnly = fal
       await actionMutation.mutateAsync({ id: documentId, action: actionModal.action });
       toast(`Purchase Document ${actionModal.action}d successfully!`, 'success');
       setActionModal(null);
-      backToList();
+      openForm(null, false);
     } catch (err: any) {
       toast(getApiErrorMessage(err, 'Failed to perform action'), 'error');
     }
@@ -1296,7 +1320,7 @@ export default function PurchaseDocScreen({ config, initialDocId, viewOnly = fal
         return;
       }
       toast(res?.message || 'Mail sent successfully!', 'success');
-      setForm(prev => ({ ...prev, status: 'SENT', emailStatus: 'SENT', emailSent: true }));
+      openForm(null, false);
     } catch (err: any) {
       toast(getApiErrorMessage(err, 'Failed to send email'), 'error');
     }

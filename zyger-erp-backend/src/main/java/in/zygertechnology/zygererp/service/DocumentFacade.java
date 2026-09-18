@@ -1981,6 +1981,17 @@ public class DocumentFacade {
                     try { allotmentDoc = getByNumber("stock-allotment", allotmentNo); } catch (Exception ignored) {}
                 }
             }
+            // Purchase Return carries no location field of its own either, and unlike a
+            // Sales DC (one source location for the whole document) a PO Inward can receive
+            // different line items into different stores — so resolve each return line's
+            // location from the matching item on the original PO Inward rather than a single
+            // header value, falling back to MAIN only if that item can't be matched.
+            DocEntity originalInwardDoc = null;
+            if ("purchase-return".equals(def.key()) && e instanceof PurchaseReturn pret
+                    && "po-inward".equals(pret.getOriginalDocumentType())
+                    && pret.getOriginalDocumentNo() != null && !pret.getOriginalDocumentNo().isBlank()) {
+                try { originalInwardDoc = getByNumber("po-inward", pret.getOriginalDocumentNo()); } catch (Exception ignored) {}
+            }
             // A DC Return / Invoice Return carries no source-location field of its own —
             // goods must go back into whatever real store the original DC/Invoice actually
             // shipped from, not the "MAIN" fallback (which isn't a registered store and
@@ -2010,6 +2021,15 @@ public class DocumentFacade {
                         if (l.getItemCode() != null && l.getItemCode().equals(aLine.getItemCode())
                                 && aLine.getLocation() != null && !aLine.getLocation().isBlank()) {
                             loc = aLine.getLocation();
+                            break;
+                        }
+                    }
+                }
+                if (loc.isEmpty() && originalInwardDoc != null) {
+                    for (LineEntity iLine : originalInwardDoc.getLines()) {
+                        if (l.getItemCode() != null && l.getItemCode().equals(iLine.getItemCode())
+                                && iLine.getLocation() != null && !iLine.getLocation().isBlank()) {
+                            loc = iLine.getLocation();
                             break;
                         }
                     }

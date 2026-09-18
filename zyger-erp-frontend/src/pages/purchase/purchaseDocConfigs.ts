@@ -477,12 +477,23 @@ export const PURCHASE_RETURN_CONFIG: DocScreenConfig = {
       { colNo: 2, key: 'itemCode', label: 'Item Code *', type: 'lookup', required: true, width: '150px' },
       { colNo: 3, key: 'itemDesc', label: 'Description', width: '170px' },
       { colNo: 4, key: 'uom', label: 'UOM', width: '80px' },
-      { colNo: 5, key: 'originalReceivedQty', label: 'Received Qty', type: 'number', readOnly: true, width: '100px' },
-      { colNo: 6, key: 'returnQty', label: 'Return Qty *', type: 'number', required: true, width: '100px' },
-      { colNo: 7, key: 'rate', label: 'Rate (₹)', type: 'number', width: '95px' },
-      { colNo: 8, key: 'netAmount', label: 'Amount (₹)', type: 'number', readOnly: true, width: '100px' },
-      { colNo: 9, key: 'reasonCode', label: 'Line Reason', width: '110px' },
-      { colNo: 10, key: 'remarks', label: 'Remarks', width: '110px' },
+      // Leave blank to auto-resolve from the matching item on the original PO Inward
+      // (see DocumentFacade.collectLines) — only needed here to override that, e.g. the
+      // material was moved to a different store since it was received.
+      { colNo: 5, key: 'location', label: 'Warehouse / Location', width: '120px' },
+      { colNo: 6, key: 'batchNo', label: 'Batch No', width: '100px' },
+      { colNo: 7, key: 'heatNo', label: 'Heat No', width: '100px' },
+      { colNo: 8, key: 'lotNo', label: 'Lot No', width: '100px' },
+      { colNo: 9, key: 'originalReceivedQty', label: 'Received Qty', type: 'number', readOnly: true, width: '100px' },
+      { colNo: 10, key: 'returnQty', label: 'Return Qty *', type: 'number', required: true, width: '100px' },
+      { colNo: 11, key: 'rate', label: 'Rate (₹)', type: 'number', width: '95px' },
+      // Defaults from the original PO Inward line's tax %; editable in case the debit note
+      // needs a different rate than what was originally charged.
+      { colNo: 12, key: 'tax', label: 'Tax %', type: 'number', width: '75px' },
+      { colNo: 13, key: 'taxAmount', label: 'Tax Amount (₹)', type: 'number', readOnly: true, width: '110px' },
+      { colNo: 14, key: 'netAmount', label: 'Amount incl. Tax (₹)', type: 'number', readOnly: true, width: '120px' },
+      { colNo: 15, key: 'reasonCode', label: 'Line Reason', width: '110px' },
+      { colNo: 16, key: 'remarks', label: 'Remarks', width: '110px' },
     ],
   },
 };

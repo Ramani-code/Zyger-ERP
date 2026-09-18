@@ -66,6 +66,7 @@ export default function StockIssueScreen({
         viewOnly={viewOnly}
         onBack={handleBack}
         onSaved={handleSaved}
+        onReset={openAdd}
       />
     );
   }

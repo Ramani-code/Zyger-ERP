@@ -49,6 +49,10 @@ interface ReturnManagementFormProps {
   viewOnly?: boolean;
   onBack: () => void;
   onSaved?: (id: string) => void;
+  /** Remounts the form blank (bumps the parent's formKey) — called after every
+   * successful Save/Submit/Post/Approve/Reject/Cancel so the user lands on a
+   * fresh entry form instead of staying on the just-saved document. */
+  onReset?: () => void;
 }
 
 export default function ReturnManagementForm({
@@ -57,6 +61,7 @@ export default function ReturnManagementForm({
   viewOnly = false,
   onBack,
   onSaved,
+  onReset,
 }: ReturnManagementFormProps) {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -110,76 +115,155 @@ export default function ReturnManagementForm({
   // For Stock Return & Received Against Issue, load stock issue documents for select dropdown
   const isIssueReturn = config.transactionType === 'STOCK_RETURN' || config.screenId === 'stock-return' || config.transactionType === 'ISSUE_RETURN';
   const [stockIssueDocs, setStockIssueDocs] = useState<Array<{ docNo: string; department?: string; jobOrderNo?: string; issueType?: string; lines?: any[] }>>([]);
-  const [sourceIssueType, setSourceIssueType] = useState('rm-issue');
+  // Defaults to "all" — defaulting to one specific issue type (as this used to,
+  // 'rm-issue') silently hid every General Issue / Internal Issue document from
+  // the "Original Stock Issue Number" dropdown until the user noticed this
+  // filter existed and changed it themselves.
+  const [sourceIssueType, setSourceIssueType] = useState('all');
 
   // For DC Return, load active/posted Sales DC documents for select dropdown
   const isDcReturn = config.screenId === 'dc-return' || config.transactionType === 'DC_RETURN';
+  const isInvoiceReturn = config.screenId === 'invoice-return' || config.transactionType === 'SALES_RETURN';
   const [originalDcDocs, setOriginalDcDocs] = useState<Array<{ docNo: string; date?: string; customer?: string; party?: string; salesOrderNumber?: string; customerPoNumber?: string; lines?: any[] }>>([]);
+  const [originalInvoiceDocs, setOriginalInvoiceDocs] = useState<Array<{ docNo: string; date?: string; customer?: string; party?: string; salesOrderNumber?: string; customerPoNumber?: string; lines?: any[] }>>([]);
 
   useEffect(() => {
     if (!isDcReturn) return;
-    axiosClient.get('/v1/sales/sales-dc?size=100')
-      .then((res) => {
-        const data = res.data?.content || res.data || [];
-        if (Array.isArray(data) && data.length > 0) {
-          setOriginalDcDocs(data);
-        } else {
-          setOriginalDcDocs([
-            {
-              docNo: 'SDC-2026-0001',
-              date: '2026-02-14',
-              customer: 'ABC Engineering Ltd',
-              salesOrderNumber: 'SO-2026-0001',
-              customerPoNumber: 'PO-7882',
-              lines: [
-                { itemCode: 'ITEM-001', itemDesc: 'Precision CNC Shaft 25mm', qty: 250, returnedQty: 250, batchNo: 'BT-101', heatNo: 'HT-501', location: 'MAIN_STORE' },
-                { itemCode: 'ITEM-002', itemDesc: 'High Tensile Bolt M12', qty: 500, returnedQty: 500, batchNo: 'BT-102', heatNo: 'HT-502', location: 'MAIN_STORE' },
-              ]
-            },
-            {
-              docNo: 'SDC-2026-0002',
-              date: '2026-02-15',
-              customer: 'Precision Auto Tech',
-              salesOrderNumber: 'SO-2026-0002',
-              customerPoNumber: 'PO-9102',
-              lines: [
-                { itemCode: 'ITEM-003', itemDesc: 'Hydraulic Flange Ring', qty: 100, returnedQty: 100, batchNo: 'BT-103', heatNo: 'HT-503', location: 'MAIN_STORE' },
-              ]
-            }
-          ]);
+    // Load issued DCs across Sales (Sales DC) and Delivery Challan module
+    // (JO DC + General DC) so the Original DC dropdown shows every DC that has
+    // actually moved stock — de-duplicated by doc no, and excluding JO DC
+    // "Receiving after Job Work" challans (those are stock-IN returns, not issues).
+    let cancelled = false;
+
+    const issuedStatuses = ['POSTED', 'DISPATCHED', 'PARTIALLY_DISPATCHED', 'CONFIRMED'];
+    const hasIssuedQty = (lines: any[]) =>
+      Array.isArray(lines) &&
+      lines.some(
+        (l: any) => Number(l.returnedQty || l.dispatchQty || l.qty || 0) > 0
+      );
+
+    const sourceType: Array<[string, () => Promise<any[]>, (d: any) => boolean]> = [
+      [
+        'sales-dc',
+        () =>
+          axiosClient
+            .get('/v1/sales/sales-dc?size=500')
+            .then((res) => {
+              const data = res.data?.content || res.data || [];
+              return Array.isArray(data) ? data : [];
+            }),
+        (d) => issuedStatuses.includes(d.status),
+      ],
+      [
+        'jo-dc',
+        () =>
+          axiosClient
+            .get('/inventory/delivery-challan/jo-dc?size=500')
+            .then((res) => {
+              const data = res.data?.content || res.data || [];
+              return Array.isArray(data) ? data : [];
+            }),
+        (d) =>
+          d.status === 'POSTED' &&
+          !(d.challanPurpose || '').toLowerCase().startsWith('receiving'),
+      ],
+      [
+        'general-dc',
+        () =>
+          axiosClient
+            .get('/inventory/delivery-challan/general-dc?size=500')
+            .then((res) => {
+              const data = res.data?.content || res.data || [];
+              return Array.isArray(data) ? data : [];
+            }),
+        (d) => d.status === 'POSTED',
+      ],
+    ];
+
+    Promise.all(
+      sourceType.map(([, fetcher]) =>
+        fetcher().catch(() => [] as any[])
+      )
+    ).then((lists) => {
+      if (cancelled) return;
+      const seen = new Map<string, any>();
+      lists.forEach((docs, idx) => {
+        for (const d of docs) {
+          if (!sourceType[idx][2](d)) continue;
+          if (!hasIssuedQty(d.lines || [])) continue;
+          const docNo = d.docNo;
+          if (!docNo || seen.has(docNo)) continue;
+          seen.set(docNo, {
+            docNo,
+            date: d.date || d.docDate || '',
+            party: d.customer || d.party || '',
+            salesOrderNumber:
+              d.salesOrderNumber || d.salesOrderNo || d.linkedDocumentNo || '',
+            customerPoNumber: d.customerPoNumber || '',
+            lines: d.lines || [],
+          });
         }
-      })
-      .catch(() => {
-        setOriginalDcDocs([
-          {
-            docNo: 'SDC-2026-0001',
-            date: '2026-02-14',
-            customer: 'ABC Engineering Ltd',
-            salesOrderNumber: 'SO-2026-0001',
-            customerPoNumber: 'PO-7882',
-            lines: [
-              { itemCode: 'ITEM-001', itemDesc: 'Precision CNC Shaft 25mm', qty: 250, returnedQty: 250, batchNo: 'BT-101', heatNo: 'HT-501', location: 'MAIN_STORE' },
-              { itemCode: 'ITEM-002', itemDesc: 'High Tensile Bolt M12', qty: 500, returnedQty: 500, batchNo: 'BT-102', heatNo: 'HT-502', location: 'MAIN_STORE' },
-            ]
-          },
-          {
-            docNo: 'SDC-2026-0002',
-            date: '2026-02-15',
-            customer: 'Precision Auto Tech',
-            salesOrderNumber: 'SO-2026-0002',
-            customerPoNumber: 'PO-9102',
-            lines: [
-              { itemCode: 'ITEM-003', itemDesc: 'Hydraulic Flange Ring', qty: 100, returnedQty: 100, batchNo: 'BT-103', heatNo: 'HT-503', location: 'MAIN_STORE' },
-            ]
-          }
-        ]);
       });
+      setOriginalDcDocs(Array.from(seen.values()));
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [isDcReturn]);
 
   useEffect(() => {
+    if (!isInvoiceReturn) return;
+    // Load only posted Sales Invoice documents that have moved stock so the
+    // Original Invoice dropdown shows real invoices with issued quantities.
+    let cancelled = false;
+
+    axiosClient
+      .get('/v1/sales/sales-invoice?size=500')
+      .then((res) => {
+        if (cancelled) return;
+        const data = res.data?.content || res.data || [];
+        const docs = Array.isArray(data) ? data : [];
+        const invoiceStatuses = ['POSTED', 'PARTIALLY_PAID', 'PAID'];
+        const hasIssuedQty = (lines: any[]) =>
+          Array.isArray(lines) &&
+          lines.some((l: any) => Number(l.qty || l.invoiceQty || l.dispatchQty || 0) > 0);
+        const seen = new Map<string, any>();
+        for (const d of docs) {
+          if (!invoiceStatuses.includes(d.status)) continue;
+          if (!hasIssuedQty(d.lines || [])) continue;
+          const docNo = d.docNo;
+          if (!docNo || seen.has(docNo)) continue;
+          seen.set(docNo, {
+            docNo,
+            date: d.date || d.docDate || d.invoiceDate || '',
+            party: d.customer || d.party || '',
+            salesOrderNumber: d.salesOrderNumber || d.salesOrderNo || d.linkedDocumentNo || '',
+            customerPoNumber: d.customerPoNumber || '',
+            lines: d.lines || [],
+          });
+        }
+        setOriginalInvoiceDocs(Array.from(seen.values()));
+      })
+      .catch(() => {
+        if (!cancelled) setOriginalInvoiceDocs([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isInvoiceReturn]);
+
+  useEffect(() => {
     if (!isIssueReturn) return;
-    // Load posted stock issue documents across all sources: RM Issue (JO),
-    // General Issue, and Internal/External Issue (IIE).
+    // Load stock issue documents across all sources: RM Issue (JO), General
+    // Issue, and Internal/External Issue (IIE). A document that already had
+    // one return posted against it moves from POSTED to PARTIALLY_RETURNED —
+    // it can still have more returned against its remaining balance (checked
+    // server-side against source-lines when the line is saved), so both
+    // statuses must stay selectable here. Matches the multi-status allowlist
+    // pattern already used by the DC/Invoice Return dropdowns above; this one
+    // used to hard-filter to status=POSTED only, so a document silently
+    // vanished from the picker the moment its first partial return posted.
+    const issuableStatuses = ['POSTED', 'PARTIALLY_RETURNED'];
     const sourceTypes: Array<[string, string]> = [
       ['rm-issue', 'JO Issue'],
       ['general-issue', 'General Issue'],
@@ -189,34 +273,24 @@ export default function ReturnManagementForm({
 
     Promise.all(
       sourceTypes.map(([type]) =>
-        axiosClient.get(`/inventory/stock-issue/${type}?status=POSTED&size=100`)
+        axiosClient.get(`/inventory/stock-issue/${type}?size=200`)
           .then((res) => {
             const data = res.data?.content || res.data || [];
-            return (Array.isArray(data) ? data : []).map((d: any) => ({
-              docNo: d.docNo,
-              department: d.department || d.party || '',
-              jobOrderNo: d.jobOrderNo || d.jobCardNumber || d.workOrderNumber || '',
-              issueType: type,
-              lines: d.lines || [],
-            }));
+            return (Array.isArray(data) ? data : [])
+              .filter((d: any) => issuableStatuses.includes(d.status))
+              .map((d: any) => ({
+                docNo: d.docNo,
+                department: d.department || d.party || '',
+                jobOrderNo: d.jobOrderNo || d.jobCardNumber || d.workOrderNumber || '',
+                issueType: type,
+                lines: d.lines || [],
+              }));
           })
           .catch(() => [] as any[])
       )
     ).then((lists) => {
       if (!cancelled) {
-        const flat = lists.flat();
-        if (flat.length === 0) {
-          setStockIssueDocs([
-            { docNo: 'RMI-2026-0001', department: 'Production', jobOrderNo: 'JO-2026-0001', issueType: 'rm-issue', lines: [
-              { itemCode: 'ITEM-001', issueQty: 50, location: 'MAIN_STORE', batchNo: 'BT-001' },
-            ]},
-            { docNo: 'GEI-2026-0002', department: 'Maintenance', issueType: 'general-issue', lines: [
-              { itemCode: 'ITEM-003', issueQty: 10, location: 'MAIN_STORE', batchNo: 'BT-002' },
-            ]},
-          ]);
-        } else {
-          setStockIssueDocs(flat);
-        }
+        setStockIssueDocs(lists.flat());
       }
     });
     return () => { cancelled = true; };
@@ -267,6 +341,60 @@ export default function ReturnManagementForm({
             itemDesc: l.itemDesc || itemsMap.get(l.itemCode)?.description || '',
             returnedQty: String(l.qty || ''),
             acceptedQty: String(l.qty || ''),
+            rejectedQty: '0',
+            batchNo: l.batchNo || '',
+            heatNo: l.heatNo || '',
+            location: l.location || locations[0]?.code || '',
+            stockStatus: 'FREE',
+            originalIssueNo: docNoVal,
+            remarks: l.remarks || '',
+          })) : prev.lines,
+        }));
+      });
+      return;
+    }
+
+    if (isInvoiceReturn) {
+      const selectedInvoice = originalInvoiceDocs.find(d => d.docNo === docNoVal);
+      if (selectedInvoice) {
+        setForm((prev) => ({
+          ...prev,
+          originalDocumentNo: docNoVal,
+          party: selectedInvoice.customer || selectedInvoice.party || prev.party,
+          originalDcDate: selectedInvoice.date || (selectedInvoice as any).docDate || prev.originalDcDate,
+          soNumber: selectedInvoice.salesOrderNumber || prev.soNumber,
+          customerPoNumber: selectedInvoice.customerPoNumber || prev.customerPoNumber,
+          lines: selectedInvoice.lines && selectedInvoice.lines.length > 0 ? selectedInvoice.lines.map((l: any) => ({
+            itemCode: l.itemCode || '',
+            itemDesc: l.itemDesc || itemsMap.get(l.itemCode)?.description || l.description || '',
+            returnedQty: String(l.qty || l.invoiceQty || l.dispatchQty || ''),
+            acceptedQty: String(l.qty || l.invoiceQty || l.dispatchQty || ''),
+            rejectedQty: '0',
+            batchNo: l.batchNo || l.batchNumber || '',
+            heatNo: l.heatNo || l.heatNumber || '',
+            location: l.location || locations[0]?.code || 'MAIN_STORE',
+            stockStatus: 'FREE',
+            originalIssueNo: docNoVal,
+            remarks: l.remarks || `Return against ${docNoVal}`,
+          })) : prev.lines,
+        }));
+        return;
+      }
+
+      void lookupDocumentByNumber('sales-invoice', docNoVal).then((doc) => {
+        if (!doc) return;
+        setForm((prev) => ({
+          ...prev,
+          originalDocumentNo: docNoVal,
+          party: doc.party || doc.customer || prev.party,
+          originalDcDate: doc.date || (doc as any).docDate || (doc as any).invoiceDate || prev.originalDcDate,
+          soNumber: doc.salesOrderNo || doc.raw?.salesOrderNumber || prev.soNumber,
+          customerPoNumber: doc.raw?.customerPoNumber || prev.customerPoNumber,
+          lines: doc.lines && doc.lines.length > 0 ? doc.lines.map((l) => ({
+            itemCode: l.itemCode,
+            itemDesc: l.itemDesc || itemsMap.get(l.itemCode)?.description || '',
+            returnedQty: String(l.qty || l.invoiceQty || ''),
+            acceptedQty: String(l.qty || l.invoiceQty || ''),
             rejectedQty: '0',
             batchNo: l.batchNo || '',
             heatNo: l.heatNo || '',
@@ -426,7 +554,7 @@ export default function ReturnManagementForm({
     setForm((previous) => ({ ...previous, [key]: value }));
 
     if (key === 'originalDocumentNo' && value) {
-      const docTypeKey = config.screenId === 'inward-return' ? 'po-inward' : config.screenId === 'dc-return' ? 'sales-dc' : 'general-inward';
+      const docTypeKey = config.screenId === 'inward-return' ? 'po-inward' : isDcReturn ? 'sales-dc' : isInvoiceReturn ? 'sales-invoice' : 'general-inward';
       void lookupDocumentByNumber(docTypeKey, value).then((doc) => {
         if (!doc) return;
         setForm((prev) => {
@@ -476,6 +604,12 @@ export default function ReturnManagementForm({
         }
       }
 
+      if (key === 'returnedQty' || key === 'acceptedQty') {
+        const returned = parseFloat(line.returnedQty === '' ? '0' : String(line.returnedQty)) || 0;
+        const accepted = parseFloat(line.acceptedQty === '' ? '0' : String(line.acceptedQty)) || 0;
+        line.rejectedQty = String(Math.max(Number((returned - accepted).toFixed(3)), 0));
+      }
+
       lines[index] = line;
 
       return {
@@ -522,18 +656,40 @@ export default function ReturnManagementForm({
     updateMutation.isPending ||
     actionMutation.isPending;
 
-  const save = async (submit: boolean) => {
+  // DC Return and Invoice Return are entered against stock that was already issued out via a
+  // real, already-approved DC/Invoice — re-approving the return itself is pure friction, not a
+  // control, so those two skip Submit/Approve and post straight from Draft (backend:
+  // DocumentFacade.DIRECT_POST_RETURN_KEYS). Stock Return keeps the full workflow.
+  const directPostEligible =
+    config.screenId === 'dc-return' || config.screenId === 'invoice-return';
+
+  // Prefers the parent's onReset (remounts this Form via a formKey bump — the
+  // clean way to clear the documentId prop this Form doesn't own) and falls
+  // back to an in-place reset if no onReset was passed.
+  const resetToNew = () => {
+    if (onReset) {
+      onReset();
+      return;
+    }
+    initializedFor.current = null;
+    setCurrentDocument(null);
+    setForm(createEmptyForm());
+    nextNumberQuery.refetch();
+  };
+
+  const save = async (mode: 'draft' | 'submit' | 'post') => {
     if (!editable) {
       return;
     }
 
-    setValidationMode(submit ? 'submit' : 'draft');
+    const submit = mode === 'submit';
+    setValidationMode(mode === 'draft' ? 'draft' : 'submit');
 
     const errors = validateReturnManagementForm(
       config,
       form,
       itemsMap,
-      submit
+      mode !== 'draft'
     );
 
     if (errors.length > 0) {
@@ -572,8 +728,13 @@ export default function ReturnManagementForm({
         });
       }
 
-      setCurrentDocument(saved);
-      setForm(formFromDto(saved, items));
+      if (mode === 'post' && saved.status !== 'POSTED' && saved.id) {
+        saved = await actionMutation.mutateAsync({
+          id: saved.id,
+          action: 'post',
+          note: '',
+        });
+      }
 
       logSystemActivity({
         module: 'Inventory',
@@ -585,20 +746,18 @@ export default function ReturnManagementForm({
       });
 
       if (saved.id) {
-        initializedFor.current = saved.id;
         onSaved?.(saved.id);
       }
 
-      toast(
-        `${saved.docNo || config.title} ${
-          submit ? 'submitted' : 'saved as draft'
-        }.`
-      );
+      const verb =
+        mode === 'post' ? 'posted — stock updated' : submit ? 'submitted' : 'saved as draft';
+      toast(`${saved.docNo || config.title} ${verb}.`);
+      resetToNew();
     } catch (saveError) {
       toast(
         getApiErrorMessage(
           saveError,
-          submit ? 'Submit failed.' : 'Save failed.'
+          mode === 'post' ? 'Save & Post failed.' : submit ? 'Submit failed.' : 'Save failed.'
         ),
         'error'
       );
@@ -623,11 +782,9 @@ export default function ReturnManagementForm({
         note,
       });
 
-      setCurrentDocument(updated);
-      setForm(formFromDto(updated, items));
       setActionModal(null);
-
       toast(`${updated.docNo || config.title} • ${action} completed.`);
+      resetToNew();
     } catch (actionError) {
       toast(getApiErrorMessage(actionError, 'Action failed.'), 'error');
     }
@@ -744,8 +901,9 @@ export default function ReturnManagementForm({
       <div className="note">
         <span className="material-symbols-rounded">info</span>
         <span>
-          Workflow: DRAFT → SUBMITTED → APPROVED → POSTED • Posting increases
-          stock
+          {directPostEligible
+            ? 'Click Save & Post to post in one step — stock increases immediately'
+            : 'Workflow: DRAFT → SUBMITTED → APPROVED → POSTED • Posting increases stock'}
         </span>
       </div>
 
@@ -816,7 +974,12 @@ export default function ReturnManagementForm({
 
             <label className="fld">
               <span>
-                Original DC Number (Select Option) <em>*</em>
+                {isInvoiceReturn
+                  ? 'Original Invoice Number (Select Option)'
+                  : isIssueReturn
+                    ? 'Original Stock Issue Number (Select Option)'
+                    : 'Original DC Number (Select Option)'}{' '}
+                <em>*</em>
               </span>
               {isDcReturn ? (
                 <select
@@ -830,6 +993,23 @@ export default function ReturnManagementForm({
                 >
                   <option value="">— Select Original DC No —</option>
                   {originalDcDocs.map((doc) => (
+                    <option key={doc.docNo} value={doc.docNo}>
+                      {doc.docNo} — {doc.customer || doc.party || 'Customer'}
+                    </option>
+                  ))}
+                </select>
+              ) : isInvoiceReturn ? (
+                <select
+                  className="in"
+                  value={form.originalDocumentNo}
+                  disabled={!editable}
+                  onChange={(event) =>
+                    handleOriginalDocSelect(event.target.value)
+                  }
+                  style={{ fontWeight: 700, color: '#1e3a8a' }}
+                >
+                  <option value="">— Select Original Invoice No —</option>
+                  {originalInvoiceDocs.map((doc) => (
                     <option key={doc.docNo} value={doc.docNo}>
                       {doc.docNo} — {doc.customer || doc.party || 'Customer'}
                     </option>
@@ -866,10 +1046,10 @@ export default function ReturnManagementForm({
               )}
             </label>
 
-            {isDcReturn && (
+            {(isDcReturn || isInvoiceReturn) && (
               <>
                 <label className="fld">
-                  <span>Original DC Date</span>
+                  <span>{isInvoiceReturn ? 'Original Invoice Date' : 'Original DC Date'}</span>
                   <input
                     type="date"
                     className="in"
@@ -1117,11 +1297,11 @@ export default function ReturnManagementForm({
                         type="number"
                         step="any"
                         className="in"
+                        style={{ backgroundColor: '#f1f5f9' }}
                         value={line.rejectedQty}
-                        readOnly={!editable}
-                        onChange={(event) =>
-                          updateLine(index, 'rejectedQty', event.target.value)
-                        }
+                        readOnly
+                        tabIndex={-1}
+                        title="Rejected Qty = Returned Qty − Accepted Qty"
                       />
                     </td>
 
@@ -1210,22 +1390,35 @@ export default function ReturnManagementForm({
                 <button
                   type="button"
                   className="btn"
-                  onClick={() => save(false)}
+                  onClick={() => save('draft')}
                   disabled={isBusy}
                 >
                   <span className="material-symbols-rounded">save</span>
                   Save Draft
                 </button>
 
-                <button
-                  type="button"
-                  className="btn btn-p"
-                  onClick={() => save(true)}
-                  disabled={isBusy}
-                >
-                  <span className="material-symbols-rounded">send</span>
-                  Submit
-                </button>
+                {directPostEligible ? (
+                  <button
+                    type="button"
+                    className="btn btn-g"
+                    onClick={() => save('post')}
+                    disabled={isBusy}
+                    title="Saves this return and posts it immediately — stock increases right away, no separate Submit/Approve step."
+                  >
+                    <span className="material-symbols-rounded">published_with_changes</span>
+                    Save &amp; Post
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn-p"
+                    onClick={() => save('submit')}
+                    disabled={isBusy}
+                  >
+                    <span className="material-symbols-rounded">send</span>
+                    Submit
+                  </button>
+                )}
               </>
             )}
 

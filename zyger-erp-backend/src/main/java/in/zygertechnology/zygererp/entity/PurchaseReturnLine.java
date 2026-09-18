@@ -14,6 +14,10 @@ public class PurchaseReturnLine extends BaseLine implements LineEntity {
     @Column(length = 30) String uom;
     @Column(name = "return_qty", precision = 14, scale = 4) BigDecimal returnQty;
     @Column(precision = 14, scale = 4) BigDecimal rate;
+    /** Tax rate %, normally carried forward from the original PO Inward line's rate. */
+    @Column(precision = 10, scale = 2) BigDecimal tax;
+    @Column(name = "tax_amount", precision = 14, scale = 4) BigDecimal taxAmount;
+    /** Qty × Rate, net of tax — i.e. the debit-note-able value of this line. */
     @Column(name = "net_amount", precision = 14, scale = 4) BigDecimal netAmount;
     /** Original received/accepted qty against the source PO/GRN line, for the over-return guard. */
     @Column(name = "original_received_qty", precision = 14, scale = 4) BigDecimal originalReceivedQty;

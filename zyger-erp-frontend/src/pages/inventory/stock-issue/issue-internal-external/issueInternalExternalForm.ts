@@ -198,6 +198,16 @@ export function validateIssueInternalExternalForm(
       errors.push(
         `Line ${lineNo}: Item code "${line.itemCode.trim()}" is not valid.`
       );
+    } else {
+      // Mirrors DocumentFacade.validateBatchHeat() on the backend — surface the
+      // same rule here so it's a clear inline message instead of a failed post.
+      const item = itemsMap.get(line.itemCode.trim());
+      if (item?.requiresBatch && !line.batchNo.trim()) {
+        errors.push(`Line ${lineNo}: Item ${line.itemCode.trim()} requires a batch number.`);
+      }
+      if (item?.requiresHeat && !line.heatNo.trim()) {
+        errors.push(`Line ${lineNo}: Item ${line.itemCode.trim()} requires a heat number.`);
+      }
     }
 
     const qty = toNumber(line.issueQty);

@@ -88,10 +88,6 @@ const SalesInvoicePage = lazy(() => import('../pages/sales/invoice/SalesInvoiceP
 const DcReturnSalesPage = lazy(() => import('../pages/sales/return/dc/DcReturnSalesPage'));
 const InvoiceReturnSalesPage = lazy(() => import('../pages/sales/return/invoice/InvoiceReturnSalesPage'));
 const SoSchedulePage = lazy(() => import('../pages/sales/schedule/SoSchedulePage'));
-const PaymentReceiptPage = lazy(() => import('../pages/sales/payment/PaymentReceiptPage'));
-const CreditDebitNotePage = lazy(() => import('../pages/sales/credit-note/CreditDebitNotePage'));
-const EnquiryPage = lazy(() => import('../pages/sales/enquiry/EnquiryPage'));
-const QuotationPage = lazy(() => import('../pages/sales/quotation/QuotationPage'));
 const ConcessionPage = lazy(() => import('../pages/quality/concession/ConcessionPage'));
 const InwardTestCertificatePage = lazy(() => import('../pages/quality/certificate/InwardTestCertificatePage'));
 const InternalTestCertificatePage = lazy(() => import('../pages/quality/certificate/InternalTestCertificatePage'));
@@ -275,10 +271,6 @@ export const SCREEN_REGISTRY: Record<string, ScreenDefinition> = Object.fromEntr
     'sales-schedule': SoSchedulePage,
     'sales-dc-return': DcReturnSalesPage,
     'sales-invoice-return': InvoiceReturnSalesPage,
-    'payment-receipt': PaymentReceiptPage,
-    'credit-debit-note': CreditDebitNotePage,
-    'enquiry': EnquiryPage,
-    'quotation': QuotationPage,
     'production-bom': ProductionBomFreshScreen,
     'route-sheet': RouteSheetPage,
     'work-order': WorkOrderPage,

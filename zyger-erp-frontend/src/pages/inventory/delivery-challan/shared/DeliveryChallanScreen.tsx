@@ -67,6 +67,7 @@ export default function DeliveryChallanScreen({
         viewOnly={viewOnly}
         onBack={handleBack}
         onSaved={handleSaved}
+        onReset={openAdd}
       />
     );
   }

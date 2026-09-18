@@ -86,6 +86,13 @@ export function useDcLookups(config: DeliveryChallanTypeConfig) {
     retry: 1,
   });
 
+  const uomsQuery = useQuery({
+    queryKey: ['master', 'uoms'],
+    queryFn: ({ signal }) => masterService.getUoms(signal),
+    staleTime: 1000 * 60 * 5,
+    retry: 1,
+  });
+
   const partyOptions =
     config.partySource === 'customers'
       ? (customersQuery.data ?? []).map((party) => ({
@@ -101,19 +108,22 @@ export function useDcLookups(config: DeliveryChallanTypeConfig) {
     itemsQuery.isPending ||
     locationsQuery.isPending ||
     customersQuery.isPending ||
-    suppliersQuery.isPending;
+    suppliersQuery.isPending ||
+    storesQuery.isPending;
 
   const isError =
     itemsQuery.isError ||
     locationsQuery.isError ||
     customersQuery.isError ||
-    suppliersQuery.isError;
+    suppliersQuery.isError ||
+    storesQuery.isError;
 
   const firstError =
     itemsQuery.error ||
     locationsQuery.error ||
     customersQuery.error ||
-    suppliersQuery.error;
+    suppliersQuery.error ||
+    storesQuery.error;
 
   const errorMessage =
     firstError instanceof Error
@@ -127,6 +137,7 @@ export function useDcLookups(config: DeliveryChallanTypeConfig) {
       customersQuery.refetch(),
       suppliersQuery.refetch(),
       storesQuery.refetch(),
+      uomsQuery.refetch(),
     ]);
 
   const parties =
@@ -138,6 +149,7 @@ export function useDcLookups(config: DeliveryChallanTypeConfig) {
     items: itemsQuery.data ?? [],
     locations: locationsQuery.data ?? [],
     stores: storesQuery.data ?? [],
+    uoms: uomsQuery.data ?? [],
     partyOptions,
     parties,
     isLoading,

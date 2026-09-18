@@ -10,7 +10,7 @@ import {
   useSalesDocUpdate,
 } from '../../hooks/useSalesDocs';
 import type { SalesDocScreenConfig } from './salesDocConfigs';
-import { formatNumber, todayISO } from '../../utils/format';
+import { formatMoney, formatNumber, todayISO } from '../../utils/format';
 import { getApiErrorMessage } from '../../utils/apiError';
 import { useToast } from '../../contexts/ToastContext';
 import StatusBadge from '../../components/common/StatusBadge';
@@ -26,6 +26,33 @@ import { exportToCsv } from '../../utils/csvExport';
 import { filterPurchaseRelevantItems } from '../../utils/itemClassification';
 
 const PAGE_SIZE = 10;
+
+// Doc types with no submit/approve workflow — Save is the only action.
+const NO_WORKFLOW_DOC_TYPES = new Set(['sales-order', 'proforma-invoice']);
+
+// Doc types whose line-level Tax % is a plain number field rather than a
+// "GST 18%"-style text/select code.
+const NUMERIC_TAX_DOC_TYPES = new Set(['sales-order', 'proforma-invoice']);
+
+// Doc types that skip Submit/Approve and post their stock movement on the same
+// action as Save — "Save as Draft" / "Save & Post Stock" instead of a separate
+// workflow. Matches DocumentFacade's DIRECT_POST_DC_KEYS / DIRECT_POST_RETURN_KEYS
+// on the backend — dc-return/invoice-return are entered against stock that was
+// already issued via an already-approved DC/Invoice, so re-approving the return
+// itself is pure friction, not a control.
+const DIRECT_POST_ON_SAVE_DOC_TYPES = new Set(['sales-dc', 'dc-return', 'invoice-return']);
+
+// Reads a tax percentage out of whatever the user typed into the Tax Code / Tax %
+// cell — "18", "18%", "GST 18%", "Exempt" all resolve to the right rate. Falling
+// back to a fixed 18% for anything that didn't match one of a few hardcoded presets
+// (the old behaviour) silently mis-taxed every manually entered rate that wasn't in
+// that preset list.
+function parseTaxPct(taxCode: unknown): number {
+  const tc = String(taxCode ?? '').trim();
+  if (!tc || /exempt/i.test(tc)) return 0;
+  const match = tc.match(/[\d.]+/);
+  return match ? Number(match[0]) : 0;
+}
 
 interface SalesDocScreenProps {
   config: SalesDocScreenConfig;
@@ -61,9 +88,10 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
   const [auditOpen, setAuditOpen] = useState(false);
 
   // Master dropdown data
-  const [customerMasters, setCustomerMasters] = useState<Array<{ id: number; name: string; code: string; billingAddress?: string; shippingAddress?: string; address?: string; city?: string; state?: string; pincode?: string; addressesJson?: string; deliveryAddressesJson?: string }>>([]);
-  const [itemMasters, setItemMasters] = useState<Array<{ id: number; name: string; code: string; uom?: string; price?: number; description?: string; active?: boolean }>>([]);
+  const [customerMasters, setCustomerMasters] = useState<Array<{ id: number; name: string; code: string; billingAddress?: string; shippingAddress?: string; address?: string; city?: string; state?: string; pincode?: string; gstNumber?: string; gstin?: string; addressesJson?: string; deliveryAddressesJson?: string }>>([]);
+  const [itemMasters, setItemMasters] = useState<Array<{ id: number; name: string; code: string; uom?: string; price?: number; description?: string; taxCode?: string; active?: boolean }>>([]);
   const [uomMasters, setUomMasters] = useState<Array<{ id: number; code: string; name: string }>>([]);
+  const [storeMasters, setStoreMasters] = useState<Array<{ code: string; name: string }>>([]);
 
   // Active Sales Orders for Proforma, DC, Invoice auto-population
   const [salesOrderList, setSalesOrderList] = useState<Array<Record<string, unknown>>>([]);
@@ -112,6 +140,7 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
         uom: it.uom || 'NOS',
         price: it.sellingRate || it.defaultRate || 0,
         description: it.description || '',
+        taxCode: it.taxCode || '',
         active: it.active,
       }));
       setItemMasters(items.length > 0 ? items : []);
@@ -131,223 +160,36 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
       setUomMasters([{ id: 1, code: 'NOS', name: 'Numbers' }, { id: 2, code: 'KG', name: 'Kilogram' }, { id: 3, code: 'MTR', name: 'Metre' }]);
     });
 
-    // Load active sales orders
+    // Load store/location masters (Sales DC's Source Location dropdown — stock is
+    // checked against and deducted from whichever store is picked here).
+    axiosClient.get('/master/stores').then((res) => {
+      const data = res.data || [];
+      setStoreMasters(Array.isArray(data) ? data.map((s: any) => ({ code: s.code, name: s.name || s.code })) : []);
+    }).catch(() => setStoreMasters([]));
+
+    // Load active sales orders, PIs, DCs and invoices for the cross-document
+    // lookup dropdowns (e.g. "SO Number" on a Proforma Invoice). These must only
+    // ever reflect real documents — a hardcoded sample row here previously showed
+    // up in the dropdown even when no such Sales Order actually existed.
     axiosClient.get('/v1/sales/sales-order?size=100').then((res) => {
       const content = res.data?.content || res.data || [];
-      if (Array.isArray(content) && content.length > 0) {
-        setSalesOrderList(content);
-      } else {
-        setSalesOrderList([
-          {
-            docNo: 'SO-2026-0001',
-            date: '2026-02-12',
-            customer: 'ABC Engineering Ltd',
-            customerCode: 'CUST-001',
-            customerPoNumber: 'PO-7882',
-            salesPerson: 'Ravi Teja',
-            currency: 'INR - Indian Rupee',
-            paymentTerms: '30 Days',
-            deliveryTerms: 'EXW - Ex Works',
-            billingAddress: 'Plot 45, GIDC Industrial Estate, Rajkot, Gujarat',
-            shippingAddress: 'Plot 45, GIDC Industrial Estate, Rajkot, Gujarat',
-            lines: [
-              { lineNo: 1, itemCode: 'ITEM-001', description: 'Precision CNC Shaft 25mm', qty: 250, uom: 'PCS', unitPrice: 450, discount: 0, taxCode: 'GST 18%', taxAmount: 20250, netAmount: 132750, lineStatus: 'Open' }
-            ]
-          },
-        ]);
-      }
-    }).catch(() => {
-      setSalesOrderList([
-        {
-          docNo: 'SO-2026-0001',
-          date: '2026-02-12',
-          customer: 'ABC Engineering Ltd',
-          customerCode: 'CUST-001',
-          customerPoNumber: 'PO-7882',
-          salesPerson: 'Ravi Teja',
-          currency: 'INR - Indian Rupee',
-          paymentTerms: '30 Days',
-          deliveryTerms: 'EXW - Ex Works',
-          billingAddress: 'Plot 45, GIDC Industrial Estate, Rajkot, Gujarat',
-          shippingAddress: 'Plot 45, GIDC Industrial Estate, Rajkot, Gujarat',
-          lines: [
-            { lineNo: 1, itemCode: 'ITEM-001', description: 'Precision CNC Shaft 25mm', qty: 250, uom: 'PCS', unitPrice: 450, discount: 0, taxCode: 'GST 18%', taxAmount: 20250, netAmount: 132750, lineStatus: 'Open' }
-          ]
-        },
-      ]);
-    });
+      setSalesOrderList(Array.isArray(content) ? content : []);
+    }).catch(() => setSalesOrderList([]));
 
-    // Load proforma invoices
     axiosClient.get('/v1/sales/proforma-invoice?size=100').then((res) => {
       const content = res.data?.content || res.data || [];
-      if (Array.isArray(content) && content.length > 0) {
-        setProformaInvoiceList(content);
-      } else {
-        setProformaInvoiceList([
-          {
-            docNo: 'PI-2026-0001',
-            salesOrderNumber: 'SO-2026-0001',
-            customer: 'ABC Engineering Ltd',
-          }
-        ]);
-      }
-    }).catch(() => {
-      setProformaInvoiceList([
-        {
-          docNo: 'PI-2026-0001',
-          salesOrderNumber: 'SO-2026-0001',
-          customer: 'ABC Engineering Ltd',
-        }
-      ]);
-    });
+      setProformaInvoiceList(Array.isArray(content) ? content : []);
+    }).catch(() => setProformaInvoiceList([]));
 
-    // Load active sales DCs
     axiosClient.get('/v1/sales/sales-dc?size=100').then((res) => {
       const content = res.data?.content || res.data || [];
-      if (Array.isArray(content) && content.length > 0) {
-        setSalesDcList(content);
-      } else {
-        setSalesDcList([
-          {
-            docNo: 'SDC-2026-0001',
-            date: '2026-02-14',
-            customer: 'ABC Engineering Ltd',
-            customerCode: 'CUST-001',
-            salesOrderNumber: 'SO-2026-0001',
-            customerPoNumber: 'PO-7882',
-            lines: [
-              { lineNo: 1, itemCode: 'ITEM-001', description: 'Precision CNC Shaft 25mm', dispatchQty: 250, batchNumber: 'BT-101', heatNumber: 'HT-501' },
-              { lineNo: 2, itemCode: 'ITEM-002', description: 'High Tensile Bolt M12', dispatchQty: 500, batchNumber: 'BT-102', heatNumber: 'HT-502' }
-            ]
-          },
-          {
-            docNo: 'SDC-2026-0002',
-            date: '2026-02-15',
-            customer: 'Precision Auto Tech',
-            customerCode: 'CUST-002',
-            salesOrderNumber: 'SO-2026-0002',
-            customerPoNumber: 'PO-9102',
-            lines: [
-              { lineNo: 1, itemCode: 'ITEM-003', description: 'Hydraulic Flange Ring', dispatchQty: 100, batchNumber: 'BT-103', heatNumber: 'HT-503' }
-            ]
-          }
-        ]);
-      }
-    }).catch(() => {
-      setSalesDcList([
-        {
-          docNo: 'SDC-2026-0001',
-          date: '2026-02-14',
-          customer: 'ABC Engineering Ltd',
-          customerCode: 'CUST-001',
-          salesOrderNumber: 'SO-2026-0001',
-          customerPoNumber: 'PO-7882',
-          lines: [
-            { lineNo: 1, itemCode: 'ITEM-001', description: 'Precision CNC Shaft 25mm', dispatchQty: 250, batchNumber: 'BT-101', heatNumber: 'HT-501' },
-            { lineNo: 2, itemCode: 'ITEM-002', description: 'High Tensile Bolt M12', dispatchQty: 500, batchNumber: 'BT-102', heatNumber: 'HT-502' }
-          ]
-        },
-        {
-          docNo: 'SDC-2026-0002',
-          date: '2026-02-15',
-          customer: 'Precision Auto Tech',
-          customerCode: 'CUST-002',
-          salesOrderNumber: 'SO-2026-0002',
-          customerPoNumber: 'PO-9102',
-          lines: [
-            { lineNo: 1, itemCode: 'ITEM-003', description: 'Hydraulic Flange Ring', dispatchQty: 100, batchNumber: 'BT-103', heatNumber: 'HT-503' }
-          ]
-        }
-      ]);
-    });
+      setSalesDcList(Array.isArray(content) ? content : []);
+    }).catch(() => setSalesDcList([]));
 
-    // Load active sales invoices
     axiosClient.get('/v1/sales/sales-invoice?size=100').then((res) => {
       const content = res.data?.content || res.data || [];
-      if (Array.isArray(content) && content.length > 0) {
-        setSalesInvoiceList(content);
-      } else {
-        setSalesInvoiceList([
-          {
-            docNo: 'INV-2026-0001',
-            date: '2026-02-16',
-            salesOrderNumber: 'SO-2026-0001',
-            customer: 'ABC Engineering Ltd',
-            customerCode: 'CUST-001',
-            customerPoNumber: 'PO-7882',
-            piNumber: 'PI-2026-0001',
-            piReference: 'PI-2026-0001',
-            currency: 'INR - Indian Rupee',
-            paymentTerms: '30 Days',
-            deliveryTerms: 'EXW - Ex Works',
-            billingAddress: 'Plot 45, GIDC Industrial Estate, Rajkot, Gujarat',
-            shippingAddress: 'Plot 45, GIDC Industrial Estate, Rajkot, Gujarat',
-            lines: [
-              { lineNo: 1, itemCode: 'ITEM-001', description: 'Precision CNC Shaft 25mm', billedQty: 250, qty: 250, uom: 'PCS', unitPrice: 450, batchNumber: 'BT-101', heatNumber: 'HT-501' },
-              { lineNo: 2, itemCode: 'ITEM-002', description: 'High Tensile Bolt M12', billedQty: 500, qty: 500, uom: 'NOS', unitPrice: 85, batchNumber: 'BT-102', heatNumber: 'HT-502' }
-            ]
-          },
-          {
-            docNo: 'INV-2026-0002',
-            date: '2026-02-17',
-            salesOrderNumber: 'SO-2026-0002',
-            customer: 'Precision Auto Tech',
-            customerCode: 'CUST-002',
-            customerPoNumber: 'PO-9102',
-            piNumber: 'PI-2026-0002',
-            piReference: 'PI-2026-0002',
-            currency: 'INR - Indian Rupee',
-            paymentTerms: '15 Days',
-            deliveryTerms: 'FOB - Free on Board',
-            billingAddress: '302 Park Road, Ambattur Industrial Estate, Chennai, Tamil Nadu',
-            shippingAddress: '302 Park Road, Ambattur Industrial Estate, Chennai, Tamil Nadu',
-            lines: [
-              { lineNo: 1, itemCode: 'ITEM-003', description: 'Hydraulic Flange Ring', billedQty: 100, qty: 100, uom: 'PCS', unitPrice: 1250, batchNumber: 'BT-103', heatNumber: 'HT-503' }
-            ]
-          }
-        ]);
-      }
-    }).catch(() => {
-      setSalesInvoiceList([
-        {
-          docNo: 'INV-2026-0001',
-          date: '2026-02-16',
-          salesOrderNumber: 'SO-2026-0001',
-          customer: 'ABC Engineering Ltd',
-          customerCode: 'CUST-001',
-          customerPoNumber: 'PO-7882',
-          piNumber: 'PI-2026-0001',
-          piReference: 'PI-2026-0001',
-          currency: 'INR - Indian Rupee',
-          paymentTerms: '30 Days',
-          deliveryTerms: 'EXW - Ex Works',
-          billingAddress: 'Plot 45, GIDC Industrial Estate, Rajkot, Gujarat',
-          shippingAddress: 'Plot 45, GIDC Industrial Estate, Rajkot, Gujarat',
-          lines: [
-            { lineNo: 1, itemCode: 'ITEM-001', description: 'Precision CNC Shaft 25mm', billedQty: 250, qty: 250, uom: 'PCS', unitPrice: 450, batchNumber: 'BT-101', heatNumber: 'HT-501' },
-            { lineNo: 2, itemCode: 'ITEM-002', description: 'High Tensile Bolt M12', billedQty: 500, qty: 500, uom: 'NOS', unitPrice: 85, batchNumber: 'BT-102', heatNumber: 'HT-502' }
-          ]
-        },
-        {
-          docNo: 'INV-2026-0002',
-          date: '2026-02-17',
-          salesOrderNumber: 'SO-2026-0002',
-          customer: 'Precision Auto Tech',
-          customerCode: 'CUST-002',
-          customerPoNumber: 'PO-9102',
-          piNumber: 'PI-2026-0002',
-          piReference: 'PI-2026-0002',
-          currency: 'INR - Indian Rupee',
-          paymentTerms: '15 Days',
-          deliveryTerms: 'FOB - Free on Board',
-          billingAddress: '302 Park Road, Ambattur Industrial Estate, Chennai, Tamil Nadu',
-          shippingAddress: '302 Park Road, Ambattur Industrial Estate, Chennai, Tamil Nadu',
-          lines: [
-            { lineNo: 1, itemCode: 'ITEM-003', description: 'Hydraulic Flange Ring', billedQty: 100, qty: 100, uom: 'PCS', unitPrice: 1250, batchNumber: 'BT-103', heatNumber: 'HT-503' }
-          ]
-        }
-      ]);
-    });
+      setSalesInvoiceList(Array.isArray(content) ? content : []);
+    }).catch(() => setSalesInvoiceList([]));
   }, []);
 
   const listQuery = useSalesDocList(docType, {
@@ -390,12 +232,37 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
     if (initializedForId === key) return;
     setInitializedForId(key);
     setForm({ ...doc });
-    setLines(Array.isArray(doc.lines) ? (doc.lines as Array<Record<string, unknown>>).map((l, i) => ({ lineNo: i + 1, ...l, description: String(l.description || l.itemName || l.itemDesc || '') })) : []);
+    setLines(Array.isArray(doc.lines) ? (doc.lines as Array<Record<string, unknown>>).map((l, i) => {
+      const line: Record<string, unknown> = { lineNo: i + 1, ...l, description: String(l.description || l.itemName || l.itemDesc || '') };
+      // Tax % is a plain number field for these doc types — the backend hands back a
+      // display string like "GST 9%", which would render as invalid in a number input.
+      if (NUMERIC_TAX_DOC_TYPES.has(docType)) {
+        line.taxCode = parseTaxPct(line.taxCode);
+      }
+      // Some line entities (e.g. SalesOrderItem) don't persist taxAmount separately —
+      // only the tax-inclusive netAmount is stored — so taxAmount comes back null and
+      // renders as a blank/invalid number field. Back it out from netAmount so the
+      // grid shows the real value instead of nothing.
+      if (line.taxAmount === null || line.taxAmount === undefined) {
+        const qty = Number(line.qty ?? line.billedQty ?? line.dispatchQty ?? line.orderedQty ?? line.currentReturnQty ?? 0);
+        const price = Number(line.unitPrice ?? line.rate ?? 0);
+        const discPct = Number(line.discount ?? 0);
+        const baseNet = (qty * price) - (qty * price * discPct) / 100;
+        const net = Number(line.netAmount ?? 0);
+        if (net > 0) line.taxAmount = Math.max(0, net - baseNet);
+      }
+      return line;
+    }) : []);
   }, [documentQuery.data, documentId, initializedForId]);
 
   const doc = documentQuery.data;
   const genericStatus = String(doc?.status ?? 'DRAFT');
-  const editable = !isViewOnly && (!documentId || ['DRAFT', 'REJECTED'].includes(genericStatus));
+  // Sales Order / Proforma Invoice have no submit/approve/cancel workflow — they stay
+  // editable at any status other than CANCELLED, since there's no transition to hand
+  // them back to DRAFT.
+  const editable = !isViewOnly && (NO_WORKFLOW_DOC_TYPES.has(docType)
+    ? genericStatus !== 'CANCELLED'
+    : (!documentId || ['DRAFT', 'REJECTED'].includes(genericStatus)));
   const isBusy = createMutation.isPending || updateMutation.isPending || actionMutation.isPending || deleteMutation.isPending;
 
   const rows = listQuery.data?.content ?? [];
@@ -406,24 +273,29 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
     setDocumentId(id);
     const dateToday = todayISO();
     const initialCode = id ? '' : (nextNumberQuery.data?.nextNumber || '');
-    const defaultCust = customerMasters[0] || { name: 'ABC Engineering Ltd', code: 'CUST-001' };
 
     setForm({
       date: dateToday,
       docNo: initialCode,
-      customer: defaultCust.name,
-      customerCode: defaultCust.code,
-      salesPerson: 'Sanjay Kumar',
+      customer: '',
+      customerCode: '',
+      salesPerson: '',
       customerPoNumber: '',
       currency: 'INR - Indian Rupee',
       exchangeRate: 1.00,
       paymentTerms: '30 Days',
       deliveryTerms: 'EXW - Ex Works',
-      billingAddress: 'Plot 45, GIDC Industrial Estate, Rajkot, Gujarat',
-      shippingAddress: 'Plot 45, GIDC Industrial Estate, Rajkot, Gujarat',
+      // Matches the first <option> these selects show by default — without an
+      // explicit value here, the browser displays that option but form state
+      // stays empty, so it never actually gets saved.
+      creditLimitStatus: 'OK',
+      complianceChecklist: 'Tax Verified',
+      deliveryStatus: 'Pending',
+      billingAddress: '',
+      shippingAddress: '',
       ...(config.typeFilter && defaultType ? { [config.typeFilter.field]: defaultType } : {})
     });
-    setLines([{ lineNo: 1, itemCode: '', description: '', qty: 0, uom: 'NOS', unitPrice: 0, discount: 0, taxCode: 'GST 18%', taxAmount: 0, netAmount: 0, lineStatus: 'Open' }]);
+    setLines([{ lineNo: 1, itemCode: '', description: '', qty: 0, uom: 'NOS', unitPrice: 0, discount: 0, taxCode: NUMERIC_TAX_DOC_TYPES.has(docType) ? 18 : 'GST 18%', taxAmount: 0, netAmount: 0, lineStatus: 'Open' }]);
     setMode('form');
   };
 
@@ -474,6 +346,16 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
         } else if (docType === 'sales-invoice') {
           lineData.billedQty = defaultQty;
         }
+        if (NUMERIC_TAX_DOC_TYPES.has(docType)) {
+          const taxPct = parseTaxPct(l.taxCode);
+          lineData.taxCode = taxPct;
+          const qty = Number(lineData.qty ?? defaultQty ?? 0);
+          const price = Number(lineData.unitPrice ?? lineData.rate ?? 0);
+          const baseNet = qty * price;
+          const taxAmt = (baseNet * taxPct) / 100;
+          lineData.taxAmount = taxAmt;
+          lineData.netAmount = baseNet + taxAmt;
+        }
         return lineData;
       }));
     }
@@ -495,6 +377,10 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
             customerPoNumber: doc.raw?.customerPoNumber || prev.customerPoNumber,
           }));
           if (doc.lines && doc.lines.length > 0) {
+            // The original DC's stock left from a specific store — the return must go
+            // back into that same store, not the "MAIN" the backend otherwise defaults
+            // to (which isn't a real registered location and fails to post).
+            const returnLocation = doc.raw?.sourceLocation || doc.sourceLocation || '';
             setLines(doc.lines.map((l: any, i: number) => {
               const qty = Number(l.qty || l.dispatchQty || 0);
               return {
@@ -504,6 +390,7 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
                 batchNumber: l.batchNo || l.batchNumber || '',
                 heatNumber: l.heatNo || l.heatNumber || '',
                 serialNumber: l.serialNumber || '',
+                location: returnLocation,
                 currentReturnQty: qty,
                 acceptedQty: qty,
                 rejectedQty: 0,
@@ -528,6 +415,9 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
     }));
 
     if (Array.isArray(selectedDC.lines) && selectedDC.lines.length > 0) {
+      // Same as above — the return must post back into the store the original DC
+      // actually shipped from, not the "MAIN" fallback.
+      const returnLocation = selectedDC.sourceLocation || '';
       setLines(selectedDC.lines.map((l: any, i: number) => {
         const qty = Number(l.dispatchQty ?? l.currentDispatchQty ?? l.qty ?? 0);
         return {
@@ -537,11 +427,84 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
           batchNumber: l.batchNumber || l.batchNo || '',
           heatNumber: l.heatNumber || l.heatNo || '',
           serialNumber: l.serialNumber || '',
+          location: returnLocation,
           currentReturnQty: qty,
           acceptedQty: qty,
           rejectedQty: 0,
           disposition: 'Return to Stock',
           lineRemark: l.lineRemark || l.remarks || '',
+        };
+      }));
+    }
+  };
+
+  // Sales DC Number select on the Sales Invoice form — a Sales Invoice is normally
+  // raised against goods already dispatched via a DC, so picking the DC auto-fills
+  // the customer/SO/PO details and carries the dispatched lines (with batch/heat and
+  // item pricing looked up from the item master, since DC lines don't carry price).
+  const handleDcSelectForInvoice = (dcNo: string) => {
+    const selectedDC = salesDcList.find(dc => dc.docNo === dcNo);
+    if (!selectedDC) return;
+
+    const customerName = selectedDC.customer || selectedDC.party || '';
+    const customerMaster: any = customerMasters.find(c => c.name === customerName)
+      ?? customerMasters.find(c => c.code === selectedDC.customerCode);
+    const selectedSO = salesOrderList.find(so => so.docNo === selectedDC.salesOrderNumber);
+    const customerState = customerMaster?.state || '';
+    const customerGst = customerMaster?.gstNumber || customerMaster?.gstin || '';
+    const customerBillAddr = customerMaster?.billingAddress
+      || [customerMaster?.address, customerMaster?.city, customerMaster?.pincode].filter(Boolean).join(', ');
+
+    setForm(prev => ({
+      ...prev,
+      salesDcNumber: dcNo,
+      salesOrderNumber: selectedDC.salesOrderNumber || prev.salesOrderNumber,
+      customer: customerName || prev.customer,
+      customerCode: selectedDC.customerCode || prev.customerCode,
+      customerPoNumber: selectedDC.customerPoNumber || prev.customerPoNumber,
+      piNumber: selectedDC.piReference || selectedSO?.linkedProformaInvoice || prev.piNumber,
+      customerGstin: customerGst || selectedSO?.customerGstin || prev.customerGstin,
+      placeOfSupply: customerState || selectedSO?.placeOfSupply || prev.placeOfSupply,
+      billingAddress: customerBillAddr || selectedSO?.billingAddress || prev.billingAddress,
+      shippingAddress: selectedDC.deliveryAddress || selectedDC.shippingAddress
+        || customerMaster?.shippingAddress || selectedSO?.shippingAddress || prev.shippingAddress,
+      vehicleNo: selectedDC.vehicleNo || prev.vehicleNo,
+      dateTimeOfSupply: selectedDC.dispatchDate || prev.dateTimeOfSupply,
+    }));
+
+    if (Array.isArray(selectedDC.lines) && selectedDC.lines.length > 0) {
+      const soLines = Array.isArray(selectedSO?.lines) ? (selectedSO.lines as any[]) : [];
+      setLines(selectedDC.lines.map((l: any, i: number) => {
+        // Price/tax travel on the Sales Order line, not the DC line — the DC only
+        // records what was dispatched. Fall back to the item master's defaultRate
+        // when there's no matching SO line so unit price / tax / totals auto-fill
+        // instead of every line coming back at ₹0.
+        const soLine = soLines.find((sl: any) => sl.itemCode === l.itemCode);
+        const item = itemMasters.find(it => it.code === l.itemCode);
+        const qty = Number(l.dispatchQty ?? l.currentDispatchQty ?? l.qty ?? 0);
+        const price = Number(l.unitPrice ?? soLine?.unitPrice ?? soLine?.rate ?? item?.price ?? 0);
+        const taxCode = l.taxCode || soLine?.taxCode || soLine?.tax || 'GST 18%';
+        const taxPct = parseTaxPct(taxCode);
+        const baseNet = qty * price;
+        const taxAmt = (baseNet * taxPct) / 100;
+
+        const batch = l.batchNumber || l.batchNo || '';
+        const heat = l.heatNumber || l.heatNo || '';
+        const batchHeatNumber = [batch, heat].filter(Boolean).join('/');
+        const itemName = item?.name || l.itemName || item?.description || '';
+
+        return {
+          lineNo: i + 1,
+          itemCode: l.itemCode || '',
+          itemName,
+          description: itemName,
+          batchHeatNumber,
+          billedQty: qty,
+          uom: l.uom || item?.uom || 'NOS',
+          unitPrice: price,
+          taxCode,
+          taxAmount: taxAmt,
+          netAmount: baseNet + taxAmt,
         };
       }));
     }
@@ -579,12 +542,7 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
         const price = Number(l.unitPrice ?? l.rate ?? 0);
         const baseNet = qty * price;
 
-        let taxPct = 18;
-        const tc = String(l.taxCode || l.tax || 'GST 18%');
-        if (tc.includes('28%')) taxPct = 28;
-        else if (tc.includes('12%')) taxPct = 12;
-        else if (tc.includes('5%')) taxPct = 5;
-        else if (tc.includes('Exempt')) taxPct = 0;
+        const taxPct = parseTaxPct(l.taxCode || l.tax || 'GST 18%');
 
         const taxAmt = (baseNet * taxPct) / 100;
         const netAmt = baseNet + taxAmt;
@@ -604,95 +562,6 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
           taxAmount: taxAmt,
           netAmount: netAmt,
           disposition: 'Return to Stock',
-          lineRemark: l.lineRemark || l.remarks || '',
-        };
-      }));
-    }
-  };
-
-  const handleInvoiceSelectForDC = (invoiceNo: string) => {
-    const selectedInvoice = salesInvoiceList.find(inv => inv.docNo === invoiceNo);
-    if (!selectedInvoice) {
-      if (invoiceNo) {
-        void lookupDocumentByNumber('sales-invoice', invoiceNo).then((doc) => {
-          if (!doc) return;
-          setForm(prev => ({
-            ...prev,
-            salesInvoiceNumber: invoiceNo,
-            salesOrderNumber: doc.salesOrderNo || doc.raw?.salesOrderNumber || prev.salesOrderNumber,
-            customer: doc.customer || doc.party || prev.customer,
-            customerCode: doc.supplier || doc.customer || prev.customerCode,
-            customerPoNumber: doc.raw?.customerPoNumber || prev.customerPoNumber,
-            piReference: doc.raw?.piNumber || doc.raw?.piReference || prev.piReference,
-            shippingAddress: doc.raw?.shippingAddress || prev.shippingAddress,
-            billingAddress: doc.raw?.billingAddress || prev.billingAddress,
-          }));
-
-          if (Array.isArray(doc.lines) && doc.lines.length > 0) {
-            setLines(doc.lines.map((l: any, i: number) => {
-              const qty = Number(l.qty || l.billedQty || l.dispatchQty || 0);
-              return {
-                lineNo: i + 1,
-                itemCode: l.itemCode || '',
-                description: l.description || l.itemName || l.itemDesc || '',
-                qty: qty,
-                dispatchQty: qty,
-                uom: l.uom || 'PCS',
-                batchNumber: l.batchNo || l.batchNumber || '',
-                heatNumber: l.heatNo || l.heatNumber || '',
-                serialNumber: l.serialNumber || '',
-                unitPrice: l.unitPrice || l.rate || 0,
-                lineRemark: l.remarks || l.lineRemark || '',
-              };
-            }));
-          }
-        });
-      }
-      return;
-    }
-
-    setForm(prev => ({
-      ...prev,
-      salesInvoiceNumber: invoiceNo,
-      salesOrderNumber: selectedInvoice.salesOrderNumber || prev.salesOrderNumber,
-      customer: selectedInvoice.customer || selectedInvoice.party || prev.customer,
-      customerCode: selectedInvoice.customerCode || prev.customerCode,
-      customerPoNumber: selectedInvoice.customerPoNumber || prev.customerPoNumber,
-      piReference: selectedInvoice.piNumber || selectedInvoice.piReference || prev.piReference,
-      currency: selectedInvoice.currency || prev.currency,
-      paymentTerms: selectedInvoice.paymentTerms || prev.paymentTerms,
-      deliveryTerms: selectedInvoice.deliveryTerms || prev.deliveryTerms,
-      billingAddress: selectedInvoice.billingAddress || prev.billingAddress,
-      shippingAddress: selectedInvoice.shippingAddress || prev.shippingAddress,
-    }));
-
-    if (Array.isArray(selectedInvoice.lines) && selectedInvoice.lines.length > 0) {
-      setLines(selectedInvoice.lines.map((l: any, i: number) => {
-        let batchNumber: string;
-        let heatNumber: string;
-        if (l.batchHeatNumber) {
-          const parts = String(l.batchHeatNumber).split('/');
-          batchNumber = parts[0]?.trim() || '';
-          heatNumber = parts[1]?.trim() || '';
-        } else {
-          batchNumber = l.batchNumber || l.batchNo || '';
-          heatNumber = l.heatNumber || l.heatNo || '';
-        }
-
-        const qty = Number(l.billedQty ?? l.qty ?? 0);
-        const price = Number(l.unitPrice ?? l.rate ?? 0);
-
-        return {
-          lineNo: i + 1,
-          itemCode: l.itemCode || '',
-          description: l.description || l.itemName || l.itemDesc || '',
-          qty: qty,
-          dispatchQty: qty,
-          uom: l.uom || 'NOS',
-          batchNumber: batchNumber,
-          heatNumber: heatNumber,
-          serialNumber: l.serialNumber || '',
-          unitPrice: price,
           lineRemark: l.lineRemark || l.remarks || '',
         };
       }));
@@ -765,14 +634,26 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
       const row = { ...next[index], [fieldKey]: value };
 
       if (fieldKey === 'itemCode') {
-        // Item Name and Description come from the same master field, so filling
-        // both with it just duplicates the same text across two columns. Item
-        // Name is the auto-filled one; Description stays free-text for the user.
+        // Item Name / Description / UOM / Unit Price / Tax Code all auto-fill from
+        // the item master when a line item is picked; tax amount & net total are
+        // recomputed below from qty × price × tax%.
         const item = itemMasters.find(i => i.code === value);
         if (item) {
           row.itemName = item.name || item.description || item.code;
+          row.description = row.itemName;
           row.uom = item.uom || 'PCS';
-          if (item.price) row.unitPrice = item.price;
+          row.unitPrice = Number(item.price ?? 0);
+          if (item.taxCode) row.taxCode = item.taxCode;
+          // Item Master has no defaultRate for most rows — fall back to the last
+          // known SO line price for this item so unit price still auto-fills.
+          if (!row.unitPrice) {
+            for (const so of salesOrderList) {
+              const soLines = Array.isArray(so.lines) ? (so.lines as any[]) : [];
+              const sl = soLines.find((l: any) => l.itemCode === value);
+              const soPrice = Number(sl?.unitPrice ?? sl?.rate ?? 0);
+              if (soPrice > 0) { row.unitPrice = soPrice; break; }
+            }
+          }
         } else {
           row.itemName = '';
         }
@@ -799,12 +680,7 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
       row.discountAmount = discAmt;
       const baseNet = (qty * price) - discAmt;
 
-      let taxPct = 18;
-      const tc = String(row.taxCode || 'GST 18%');
-      if (tc.includes('28%')) taxPct = 28;
-      else if (tc.includes('12%')) taxPct = 12;
-      else if (tc.includes('5%')) taxPct = 5;
-      else if (tc.includes('Exempt')) taxPct = 0;
+      const taxPct = parseTaxPct(row.taxCode ?? 'GST 18%');
 
       const taxAmt = (baseNet * taxPct) / 100;
       row.taxAmount = taxAmt;
@@ -818,7 +694,7 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
   const addLine = () => {
     setLines(prev => [
       ...prev,
-      { lineNo: prev.length + 1, itemCode: '', description: '', qty: 0, uom: 'NOS', unitPrice: 0, discount: 0, taxCode: 'GST 18%', taxAmount: 0, netAmount: 0, lineStatus: 'Open' }
+      { lineNo: prev.length + 1, itemCode: '', description: '', qty: 0, uom: 'NOS', unitPrice: 0, discount: 0, taxCode: NUMERIC_TAX_DOC_TYPES.has(docType) ? 18 : 'GST 18%', taxAmount: 0, netAmount: 0, lineStatus: 'Open' }
     ]);
   };
 
@@ -834,7 +710,7 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
     return payload;
   };
 
-  const handleSave = async (e?: React.FormEvent) => {
+  const handleSave = async (e?: React.FormEvent, postAfter = false) => {
     if (e) e.preventDefault();
     try {
       const payload = buildPayload();
@@ -847,6 +723,13 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
         toast('Sales Document created successfully!', 'success');
       }
 
+      // Sales DC ships straight from Draft to a posted stock movement in one action —
+      // no separate Submit/Approve step, same as DC Return/Invoice Return already do.
+      if (postAfter && savedRes?.id && savedRes.status !== 'POSTED') {
+        savedRes = await actionMutation.mutateAsync({ id: savedRes.id, action: 'post', note: 'Save & Post Stock' });
+        toast('Stock movement posted successfully!', 'success');
+      }
+
       logSystemActivity({
         module: 'Sales',
         activity: `${config.title} (${savedRes?.docNo || form.docNo || 'Document'})`,
@@ -856,7 +739,9 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
         status: savedRes?.status || 'APPROVED',
       });
 
-      backToList();
+      // Land back on a fresh blank entry form rather than the list — same behavior
+      // every success path in this screen now follows.
+      openForm(null, false);
     } catch (err: any) {
       toast(getApiErrorMessage(err, 'Failed to save sales document'), 'error');
     }
@@ -872,7 +757,7 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
       await actionMutation.mutateAsync({ id: documentId, action: actionModal.action, note });
       toast(`Sales Document ${actionModal.action}d successfully!`, 'success');
       setActionModal(null);
-      backToList();
+      openForm(null, false);
     } catch (err: any) {
       toast(getApiErrorMessage(err, 'Failed to perform action'), 'error');
     }
@@ -984,6 +869,13 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
                           return (
                             <td key={col.field}>
                               <StatusBadge status={String(val || 'DRAFT')} />
+                            </td>
+                          );
+                        }
+                        if (col.money) {
+                          return (
+                            <td key={col.field} className="num cell-b">
+                              {formatMoney(val)}
                             </td>
                           );
                         }
@@ -1119,7 +1011,28 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
               Audit
             </button>
           )}
-          {editable && (
+          {editable && DIRECT_POST_ON_SAVE_DOC_TYPES.has(docType) && (
+            <>
+              <button
+                onClick={() => handleSave(undefined, false)}
+                disabled={isBusy}
+                className="btn"
+              >
+                <span className="material-symbols-rounded">save</span>
+                {isBusy ? 'Saving...' : 'Save as Draft'}
+              </button>
+              <button
+                onClick={() => handleSave(undefined, true)}
+                disabled={isBusy}
+                className="btn btn-p"
+                title="Saves this DC and immediately posts it — stock reduces right away, no separate Submit/Approve step."
+              >
+                <span className="material-symbols-rounded">check_circle</span>
+                {isBusy ? 'Saving...' : 'Save & Post Stock'}
+              </button>
+            </>
+          )}
+          {editable && !DIRECT_POST_ON_SAVE_DOC_TYPES.has(docType) && (
             <button
               onClick={() => handleSave()}
               disabled={isBusy}
@@ -1129,7 +1042,9 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
               {isBusy ? 'Saving...' : 'Save Document'}
             </button>
           )}
-          {documentId && editable && (
+          {/* Sales Order / Proforma Invoice are Save-only; Sales DC posts on Save — none of
+              these three need the submit/approve/reject/post workflow below. */}
+          {!NO_WORKFLOW_DOC_TYPES.has(docType) && !DIRECT_POST_ON_SAVE_DOC_TYPES.has(docType) && documentId && editable && (
             <button
               onClick={() => setActionModal({ action: 'submit', danger: false })}
               className="btn btn-g"
@@ -1138,7 +1053,7 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
               Submit
             </button>
           )}
-          {documentId && ['SUBMITTED', 'PENDING_TIER1', 'PENDING_TIER2', 'PENDING_TIER3'].includes(String(form.status)) && can('sales', 'Approve') && (
+          {!NO_WORKFLOW_DOC_TYPES.has(docType) && !DIRECT_POST_ON_SAVE_DOC_TYPES.has(docType) && documentId && ['SUBMITTED', 'PENDING_TIER1', 'PENDING_TIER2', 'PENDING_TIER3'].includes(String(form.status)) && can('sales', 'Approve') && (
             <button
               onClick={() => setActionModal({ action: 'approve', danger: false })}
               className="btn btn-p"
@@ -1147,7 +1062,7 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
               Approve{String(form.status).startsWith('PENDING_TIER') ? ` (${String(form.status).replace('PENDING_', '')})` : ''}
             </button>
           )}
-          {documentId && ['SUBMITTED', 'PENDING_TIER1', 'PENDING_TIER2', 'PENDING_TIER3'].includes(String(form.status)) && (
+          {!NO_WORKFLOW_DOC_TYPES.has(docType) && !DIRECT_POST_ON_SAVE_DOC_TYPES.has(docType) && documentId && ['SUBMITTED', 'PENDING_TIER1', 'PENDING_TIER2', 'PENDING_TIER3'].includes(String(form.status)) && (
             <button
               onClick={() => setActionModal({ action: 'reject', danger: true })}
               className="btn btn-d"
@@ -1156,7 +1071,7 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
               Reject
             </button>
           )}
-          {documentId && String(form.status) === 'REJECTED' && (
+          {!NO_WORKFLOW_DOC_TYPES.has(docType) && !DIRECT_POST_ON_SAVE_DOC_TYPES.has(docType) && documentId && String(form.status) === 'REJECTED' && (
             <button
               onClick={() => setActionModal({ action: 'reopen', danger: false })}
               className="btn btn-g"
@@ -1165,7 +1080,7 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
               Reopen
             </button>
           )}
-          {documentId && String(form.status) === 'APPROVED' && (
+          {!NO_WORKFLOW_DOC_TYPES.has(docType) && !DIRECT_POST_ON_SAVE_DOC_TYPES.has(docType) && documentId && String(form.status) === 'APPROVED' && (
             <button
               onClick={() => setActionModal({ action: 'post', danger: false })}
               className="btn btn-p"
@@ -1174,7 +1089,7 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
               Post
             </button>
           )}
-          {documentId && ['DRAFT', 'SUBMITTED', 'PENDING_TIER1', 'PENDING_TIER2', 'PENDING_TIER3', 'APPROVED', 'CONFIRMED', 'POSTED', 'RECEIVED'].includes(String(form.status)) && (
+          {!NO_WORKFLOW_DOC_TYPES.has(docType) && documentId && ['DRAFT', 'SUBMITTED', 'PENDING_TIER1', 'PENDING_TIER2', 'PENDING_TIER3', 'APPROVED', 'CONFIRMED', 'POSTED', 'RECEIVED'].includes(String(form.status)) && (
             <button
               onClick={() => setActionModal({ action: 'cancel', danger: true })}
               className="btn btn-d"
@@ -1198,13 +1113,11 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
           {config.fields.map((field) => {
             const val = form[field.key] ?? '';
 
-            // 2nd Header Input Field (SO Number Select Option)
+            // SO Number Select Option
             if (field.key === 'salesOrderNumber') {
               return (
                 <div key={field.key} className="fld">
-                  <span>
-                    3. SO Number (Select Option) <em className="req">*</em>
-                  </span>
+                  <span>{field.label}</span>
                   <select
                     disabled={!editable}
                     value={String(val)}
@@ -1223,22 +1136,47 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
               );
             }
 
-            // Sales Invoice Number Select (for Sales DC)
-            if (field.key === 'salesInvoiceNumber') {
+            // Source Location Select Option (Sales DC) — which store to check stock
+            // availability against and deduct from on post.
+            if (field.key === 'sourceLocation') {
               return (
                 <div key={field.key} className="fld">
-                  <span>2. Sales Invoice Number (Select Option)</span>
+                  <span>{field.label}</span>
                   <select
                     disabled={!editable}
                     value={String(val)}
-                    onChange={(e) => handleInvoiceSelectForDC(e.target.value)}
+                    onChange={(e) => setForm(prev => ({ ...prev, sourceLocation: e.target.value }))}
+                    className="in"
+                  >
+                    <option value="">-- Select Location --</option>
+                    {storeMasters.map((s) => (
+                      <option key={s.code} value={s.code}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              );
+            }
+
+            // Sales DC Number Select Option (Sales Invoice) — only shown when there
+            // are actual Sales DC documents to pick from.
+            if (field.key === 'salesDcNumber') {
+              if (salesDcList.length === 0) return null;
+              return (
+                <div key={field.key} className="fld">
+                  <span>{field.label}</span>
+                  <select
+                    disabled={!editable}
+                    value={String(val)}
+                    onChange={(e) => handleDcSelectForInvoice(e.target.value)}
                     className="in"
                     style={{ fontWeight: 700, color: '#1e3a8a' }}
                   >
-                    <option value="">-- Select Sales Invoice --</option>
-                    {salesInvoiceList.map((inv: any) => (
-                      <option key={inv.docNo} value={inv.docNo}>
-                        {inv.docNo} - {inv.customer || 'Customer'} ({inv.date})
+                    <option value="">-- Select Sales DC --</option>
+                    {salesDcList.map((dc: any) => (
+                      <option key={dc.docNo} value={dc.docNo}>
+                        {dc.docNo} - {dc.customer || 'Customer'} ({dc.date})
                       </option>
                     ))}
                   </select>
@@ -1252,11 +1190,12 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
                 <div key={field.key} className="fld">
                   <span>{field.label}</span>
                   <select
-                    disabled={!editable}
+                    disabled={!editable || field.readOnly}
                     value={String(val)}
                     onChange={(e) => handleCustomerSelect(e.target.value)}
                     className="in"
                   >
+                    <option value="">-- Select Customer --</option>
                     {customerMasters.map((c) => (
                       <option key={c.id} value={c.name}>
                         {c.name} ({c.code})
@@ -1411,7 +1350,7 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
                                 <option value="">-- UOM --</option>
                                 {uomMasters.map((u) => (
                                   <option key={u.id} value={u.code}>
-                                    {u.code} - {u.name}
+                                    {u.name}
                                   </option>
                                 ))}
                               </select>
@@ -1480,7 +1419,19 @@ export default function SalesDocScreen({ config, initialDocId, viewOnly = false,
         <button type="button" onClick={backToList} className="btn">
           Close
         </button>
-        {editable && (
+        {editable && DIRECT_POST_ON_SAVE_DOC_TYPES.has(docType) && (
+          <>
+            <button type="button" onClick={() => handleSave(undefined, false)} disabled={isBusy} className="btn">
+              <span className="material-symbols-rounded">save</span>
+              {isBusy ? 'Saving...' : 'Save as Draft'}
+            </button>
+            <button type="button" onClick={() => handleSave(undefined, true)} disabled={isBusy} className="btn btn-p">
+              <span className="material-symbols-rounded">check_circle</span>
+              {isBusy ? 'Saving...' : 'Save & Post Stock'}
+            </button>
+          </>
+        )}
+        {editable && !DIRECT_POST_ON_SAVE_DOC_TYPES.has(docType) && (
           <button type="button" onClick={() => handleSave()} disabled={isBusy} className="btn btn-p">
             <span className="material-symbols-rounded">save</span>
             {isBusy ? 'Saving...' : 'Save Document'}

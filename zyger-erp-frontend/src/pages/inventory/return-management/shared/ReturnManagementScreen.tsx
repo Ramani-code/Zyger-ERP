@@ -67,6 +67,7 @@ export default function ReturnManagementScreen({
         viewOnly={viewOnly}
         onBack={handleBack}
         onSaved={handleSaved}
+        onReset={openAdd}
       />
     );
   }

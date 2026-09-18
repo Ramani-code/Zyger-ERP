@@ -281,8 +281,9 @@ export default function QualityDocScreen({ config, initialDocId, viewOnly = fals
     try {
       const created = await createMutation.mutateAsync(buildPayload());
       toast(`${created.docNo ?? docType} created as draft.`);
-      setDocumentId(String(created.id ?? ''));
-      setInitializedForId('');
+      // Land back on a fresh blank entry form rather than staying on the doc
+      // just created — same behavior every success path in this screen follows.
+      openForm(null, false);
     } catch (createError) {
       toast(getApiErrorMessage(createError, 'Create failed.'), 'error');
     }
@@ -291,9 +292,9 @@ export default function QualityDocScreen({ config, initialDocId, viewOnly = fals
   const handleSave = async () => {
     if (!documentId) return;
     try {
-      const updated = await updateMutation.mutateAsync({ id: documentId, payload: buildPayload() });
-      setForm({ ...updated });
-      toast(`${updated.docNo ?? docType} saved.`);
+      await updateMutation.mutateAsync({ id: documentId, payload: buildPayload() });
+      toast(`${docType} saved.`);
+      openForm(null, false);
     } catch (saveError) {
       toast(getApiErrorMessage(saveError, 'Save failed.'), 'error');
     }
@@ -303,9 +304,9 @@ export default function QualityDocScreen({ config, initialDocId, viewOnly = fals
     if (!documentId) return;
     try {
       const updated = await actionMutation.mutateAsync({ id: documentId, action: action as 'submit', note });
-      setForm({ ...updated });
       setActionModal(null);
       toast(`${updated.docNo ?? docType} • ${action} completed.`);
+      openForm(null, false);
     } catch (actionError) {
       toast(getApiErrorMessage(actionError, `${action} failed.`), 'error');
     }

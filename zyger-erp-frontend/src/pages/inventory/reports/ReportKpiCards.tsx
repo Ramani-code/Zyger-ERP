@@ -18,24 +18,26 @@ export default function ReportKpiCards({
   };
 
   return (
-    <div className="stats">
+    <div className="ir-kpi-grid">
       {KPI_CARDS.map((card) => (
-        <div
+        <button
           key={card.key}
-          className="stat clickable"
+          type="button"
+          className="ir-kpi-tile"
           onClick={() => onCardClick(card)}
           title={`Open ${card.label} details`}
         >
-          <div className="ic" style={{ background: card.color }}>
-            <span className="material-symbols-rounded">{card.icon}</span>
+          <div className="ir-kpi-top">
+            <span className="ir-kpi-label">{card.label}</span>
+            <span
+              className="ir-kpi-ic"
+              style={{ color: card.color, background: `color-mix(in srgb, ${card.color} 16%, transparent)` }}
+            >
+              <span className="material-symbols-rounded">{card.icon}</span>
+            </span>
           </div>
-
-          <div>
-            <div className="l">{card.label}</div>
-            <div className="v">{kpis ? valueFor(card) : '—'}</div>
-            <div className="s">Click for details</div>
-          </div>
-        </div>
+          <div className="ir-kpi-value">{kpis ? valueFor(card) : '—'}</div>
+        </button>
       ))}
     </div>
   );

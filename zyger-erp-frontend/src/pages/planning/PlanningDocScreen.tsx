@@ -523,17 +523,18 @@ export default function PlanningDocScreen({ config, initialDocId, viewOnly = fal
     try {
       const created = await createMutation.mutateAsync(buildPayload());
       toast(`${created.docNo ?? docType} created as draft.`);
-      setDocumentId(String(created.id ?? ''));
-      setInitializedForId('');
+      // Land back on a fresh blank entry form rather than staying on the doc
+      // just created — same behavior every success path in this screen follows.
+      openForm(null, false);
     } catch (e) { toast(getApiErrorMessage(e, 'Create failed.'), 'error'); }
   };
 
   const handleSave = async () => {
     if (!documentId) return;
     try {
-      const updated = await updateMutation.mutateAsync({ id: documentId, payload: buildPayload() });
-      setForm({ ...updated });
-      toast(`${updated.docNo ?? docType} saved.`);
+      await updateMutation.mutateAsync({ id: documentId, payload: buildPayload() });
+      toast(`${docType} saved.`);
+      openForm(null, false);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       if (msg.startsWith('CONFLICT:')) {
@@ -551,9 +552,9 @@ export default function PlanningDocScreen({ config, initialDocId, viewOnly = fal
     if (!documentId) return;
     try {
       const updated = await actionMutation.mutateAsync({ id: documentId, action, note });
-      setForm({ ...updated });
       setActionModal(null);
       toast(`${updated.docNo ?? docType} \u2022 ${action} completed.`);
+      openForm(null, false);
     } catch (e) { toast(getApiErrorMessage(e, `${action} failed.`), 'error'); }
   };
 

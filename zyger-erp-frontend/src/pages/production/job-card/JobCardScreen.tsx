@@ -160,7 +160,9 @@ export default function JobCardScreen({ initialSearch }: { initialSearch?: strin
         await productionApi.createJobCard(form);
         toast('Job Card created.');
       }
-      setForm({}); setEditId(null); setTab('list'); load();
+      // Land back on a fresh blank entry form (same state "+ Manual" opens)
+      // rather than the list, so the next Job Card can be entered right away.
+      setForm({}); setEditId(null); setTab('form'); load();
     } catch (e) { toast(getApiErrorMessage(e, 'Save failed.'), 'error'); }
     setBusy(false);
   };
@@ -174,7 +176,7 @@ export default function JobCardScreen({ initialSearch }: { initialSearch?: strin
         toast(data.errors?.join(', ') || 'Failed to create from Work Order.', 'error');
       } else {
         toast(`Job Card ${data.jobCardNumber || data.jobCard?.jobCardNumber} created from Work Order.`);
-        setWoNumber(''); setTab('list'); load();
+        setWoNumber(''); load();
       }
     } catch (e) { toast(getApiErrorMessage(e, 'Create from WO failed.'), 'error'); }
     setBusy(false);

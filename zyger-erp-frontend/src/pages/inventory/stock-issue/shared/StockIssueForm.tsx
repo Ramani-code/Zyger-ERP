@@ -52,6 +52,10 @@ interface StockIssueFormProps {
   viewOnly?: boolean;
   onBack: () => void;
   onSaved?: (id: string) => void;
+  /** Remounts the form blank (bumps the parent's formKey) — called after every
+   * successful Save/Submit/Post/Approve/Reject/Cancel so the user lands on a
+   * fresh entry form instead of staying on the just-saved document. */
+  onReset?: () => void;
 }
 
 export default function StockIssueForm({
@@ -60,6 +64,7 @@ export default function StockIssueForm({
   viewOnly = false,
   onBack,
   onSaved,
+  onReset,
 }: StockIssueFormProps) {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -509,6 +514,20 @@ export default function StockIssueForm({
     updateMutation.isPending ||
     actionMutation.isPending;
 
+  // Prefers the parent's onReset (remounts this Form via a formKey bump — the
+  // clean way to clear the documentId prop this Form doesn't own) and falls
+  // back to an in-place reset if no onReset was passed.
+  const resetToNew = () => {
+    if (onReset) {
+      onReset();
+      return;
+    }
+    initializedFor.current = null;
+    setCurrentDocument(null);
+    setForm(createEmptyForm(config));
+    nextNumberQuery.refetch();
+  };
+
   const save = async (submit: boolean) => {
     if (!editable) {
       return;
@@ -560,11 +579,7 @@ export default function StockIssueForm({
         });
       }
 
-      setCurrentDocument(saved);
-      setForm(formFromDto(config, saved, items));
-
       if (saved.id) {
-        initializedFor.current = saved.id;
         onSaved?.(saved.id);
       }
 
@@ -573,6 +588,7 @@ export default function StockIssueForm({
           submit ? 'submitted' : 'saved as draft'
         }.`
       );
+      resetToNew();
     } catch (saveError) {
       toast(
         getApiErrorMessage(
@@ -644,15 +660,12 @@ export default function StockIssueForm({
         });
       }
 
-      setCurrentDocument(saved);
-      setForm(formFromDto(config, saved, items));
-
       if (saved.id) {
-        initializedFor.current = saved.id;
         onSaved?.(saved.id);
       }
 
       toast(`${saved.docNo || config.title} — Stock issued successfully.`);
+      resetToNew();
     } catch (issueError) {
       toast(
         getApiErrorMessage(issueError, 'Stock issue failed.'),
@@ -676,11 +689,9 @@ export default function StockIssueForm({
         note,
       });
 
-      setCurrentDocument(updated);
-      setForm(formFromDto(config, updated, items));
       setActionModal(null);
-
       toast(`${updated.docNo || config.title} • ${action} completed.`);
+      resetToNew();
     } catch (actionError) {
       toast(getApiErrorMessage(actionError, 'Action failed.'), 'error');
     }

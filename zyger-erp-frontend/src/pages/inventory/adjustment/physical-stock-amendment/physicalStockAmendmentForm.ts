@@ -183,6 +183,12 @@ export function validatePhysicalStockAmendmentForm(
       );
     }
 
+    // Mirrors DocumentFacade.validateAmendmentReason() (INV-ADJ-01) on the backend,
+    // which requires a reason code per line for physical stock amendments.
+    if (!line.reasonCode.trim()) {
+      errors.push(`Line ${lineNo}: Reason code is required.`);
+    }
+
   });
 
   return [...new Set(errors)];

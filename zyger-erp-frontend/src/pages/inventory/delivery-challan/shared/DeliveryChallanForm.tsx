@@ -47,6 +47,10 @@ interface DeliveryChallanFormProps {
   viewOnly?: boolean;
   onBack: () => void;
   onSaved?: (id: string) => void;
+  /** Remounts the form blank (bumps the parent's formKey) — called after every
+   * successful Save/Submit/Approve/Reject/Cancel so the user lands on a fresh
+   * entry form instead of staying on the just-saved document. */
+  onReset?: () => void;
 }
 
 export default function DeliveryChallanForm({
@@ -55,6 +59,7 @@ export default function DeliveryChallanForm({
   viewOnly = false,
   onBack,
   onSaved,
+  onReset,
 }: DeliveryChallanFormProps) {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -88,6 +93,7 @@ export default function DeliveryChallanForm({
 
   const items = lookups.items;
   const locations = lookups.stores ?? [];
+  const uoms = lookups.uoms ?? [];
   const partyOptions = lookups.partyOptions;
 
   const itemsMap = useMemo(
@@ -96,6 +102,26 @@ export default function DeliveryChallanForm({
   );
 
   const allowedItems = useMemo(() => filterPurchaseRelevantItems(items), [items]);
+
+  const resolveUomCode = (raw: string): string => {
+    if (!raw) return 'PCS';
+    const norm = raw.trim().toLowerCase();
+    const match = uoms.find(
+      (u: any) =>
+        String(u.code || '').toLowerCase() === norm ||
+        String(u.name || '').toLowerCase() === norm
+    );
+    return match ? match.code : raw;
+  };
+
+  const uomOptionsFor = (current: string) => {
+    const base = uoms.length > 0 ? uoms : [{ code: current || 'PCS', name: current || 'PCS' }];
+    const exists = (base as Array<any>).some((u) => u.code === current);
+    if (!exists && current) {
+      return [...base, { code: current, name: current }];
+    }
+    return base;
+  };
 
   const partyDetailsMap = useMemo(() => {
     const map = new Map<
@@ -410,7 +436,7 @@ export default function DeliveryChallanForm({
         const item = itemsMap.get(value);
         line.itemDesc = item?.description ?? '';
         line.hsnCode = (item as any)?.hsnCode ?? (item as any)?.hsn ?? '';
-        line.uom = item?.uom ?? 'PCS';
+        line.uom = resolveUomCode(item?.uom ?? '');
         if (!line.location) {
           line.location = previous.sourceLocation || locations[0]?.code || '';
         }
@@ -500,11 +526,7 @@ export default function DeliveryChallanForm({
         });
       }
 
-      setCurrentDocument(saved);
-      setForm(formFromDto(saved, items));
-
       if (saved.id) {
-        initializedFor.current = saved.id;
         onSaved?.(saved.id);
       }
 
@@ -513,6 +535,7 @@ export default function DeliveryChallanForm({
           submit ? 'saved and stock movement posted' : 'saved as draft'
         }.`
       );
+      resetToNew();
     } catch (saveError) {
       toast(
         getApiErrorMessage(
@@ -542,11 +565,9 @@ export default function DeliveryChallanForm({
         note,
       });
 
-      setCurrentDocument(updated);
-      setForm(formFromDto(updated, items));
       setActionModal(null);
-
       toast(`${updated.docNo || config.title} • ${action} completed.`);
+      resetToNew();
     } catch (actionError) {
       toast(getApiErrorMessage(actionError, 'Action failed.'), 'error');
     }
@@ -592,9 +613,15 @@ export default function DeliveryChallanForm({
     }
   };
 
-  const handleClearNew = () => {
-    if (currentDocument?.id || documentId) {
-      onBack();
+  // The blank-form reset, factored out so a successful Save/Submit/Approve/
+  // Reject/Cancel can land the user straight back on a fresh entry form
+  // instead of staying on the just-saved document. Prefers the parent's
+  // onReset (remounts this Form via a formKey bump — the clean way to clear
+  // the documentId prop this Form doesn't own) and falls back to an in-place
+  // reset if no onReset was passed.
+  const resetToNew = () => {
+    if (onReset) {
+      onReset();
       return;
     }
     initializedFor.current = null;
@@ -603,6 +630,14 @@ export default function DeliveryChallanForm({
     setAvailabilityMap({});
     setValidationMode(null);
     nextNumberQuery.refetch();
+  };
+
+  const handleClearNew = () => {
+    if ((currentDocument?.id || documentId) && !onReset) {
+      onBack();
+      return;
+    }
+    resetToNew();
   };
 
   const handlePrint = (download: boolean) => {
@@ -1242,15 +1277,22 @@ export default function DeliveryChallanForm({
                     </td>
 
                     <td>
-                      <input
+                      <select
                         className="in"
-                        style={{ width: '60px' }}
+                        style={{ width: '90px' }}
                         value={line.uom}
-                        readOnly={!editable}
+                        disabled={!editable}
                         onChange={(event) =>
                           updateLine(index, 'uom', event.target.value)
                         }
-                      />
+                      >
+                        <option value="">— Select UOM —</option>
+                        {uomOptionsFor(line.uom).map((u: any) => (
+                          <option key={u.code} value={u.code}>
+                            {u.name || u.code}
+                          </option>
+                        ))}
+                      </select>
                     </td>
 
                     <td>

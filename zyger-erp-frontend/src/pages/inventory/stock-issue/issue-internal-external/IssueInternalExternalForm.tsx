@@ -895,6 +895,7 @@ export default function IssueInternalExternalForm({
                   <th>Item Name</th>
                   <th>Available</th>
                   <th>Issue Qty *</th>
+                  <th>Batch No</th>
                   <th>Heat No</th>
                   <th>Returnable *</th>
                   <th>Remarks</th>
@@ -942,6 +943,17 @@ export default function IssueInternalExternalForm({
                         readOnly={!editable}
                         onChange={(event) =>
                           updateLine(index, 'issueQty', event.target.value)
+                        }
+                      />
+                    </td>
+
+                    <td>
+                      <input
+                        className="in"
+                        value={line.batchNo}
+                        readOnly={!editable}
+                        onChange={(event) =>
+                          updateLine(index, 'batchNo', event.target.value)
                         }
                       />
                     </td>

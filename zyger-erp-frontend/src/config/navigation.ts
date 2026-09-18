@@ -197,20 +197,6 @@ export const NAV_ITEMS: NavTopItem[] = [
       },
       {
         type: 'item',
-        id: 'enquiry',
-        label: 'Enquiry / RFQ',
-        icon: 'contact_support',
-        screenId: 'enquiry',
-      },
-      {
-        type: 'item',
-        id: 'quotation',
-        label: 'Quotation (Costed)',
-        icon: 'request_quote',
-        screenId: 'quotation',
-      },
-      {
-        type: 'item',
         id: 'sales-order',
         label: 'Sales Order',
         icon: 'shopping_cart',
@@ -244,20 +230,6 @@ export const NAV_ITEMS: NavTopItem[] = [
         label: 'SO Schedule',
         icon: 'calendar_month',
         screenId: 'sales-schedule',
-      },
-      {
-        type: 'item',
-        id: 'payment-receipt',
-        label: 'Payment Collection',
-        icon: 'payments',
-        screenId: 'payment-receipt',
-      },
-      {
-        type: 'item',
-        id: 'credit-debit-note',
-        label: 'Credit / Debit Note',
-        icon: 'difference',
-        screenId: 'credit-debit-note',
       },
       {
         type: 'group',
