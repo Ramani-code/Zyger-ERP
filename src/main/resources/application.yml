@@ -1,0 +1,43 @@
+spring:
+  application:
+    name: vms-backend
+
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/vms}
+    username: ${SPRING_DATASOURCE_USERNAME:vms}
+    password: ${SPRING_DATASOURCE_PASSWORD:vms123}
+    hikari:
+      # keep retrying for ~30s so the API survives a slow database start-up
+      initialization-fail-timeout: 30000
+      connection-timeout: 10000
+
+  jpa:
+    open-in-view: false
+    show-sql: false
+    hibernate:
+      # Flyway owns the schema (db/migration). Hibernate must never change tables.
+      ddl-auto: none
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: false
+
+server:
+  port: 8080
+  error:
+    include-message: always
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      probes:
+        enabled: true
+
+app:
+  cors:
+    allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:3000,http://localhost}
